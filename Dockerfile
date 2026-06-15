@@ -27,11 +27,8 @@ COPY backend ./backend
 COPY supervisord.conf ./supervisord.conf
 
 EXPOSE 5173
-EXPOSE 8080
-EXPOSE 8090
+EXPOSE 8000
 
-# Single container, three independently-restartable processes (api, pricing,
-# frontend) managed by supervisord. Pricing auto-restarts on crash; restart it
-# manually without bouncing the others via:
-#   docker exec <container> supervisorctl restart pricing
+# Single container, two independently-restartable processes (api, frontend)
+# managed by supervisord. Each auto-restarts on crash without bouncing the other.
 CMD ["supervisord", "-c", "/app/supervisord.conf"]

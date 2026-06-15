@@ -1,6 +1,6 @@
 /** Shared /form + /chat guided-intake column layout (keep LoanWizard /chat in sync with FormChatFlow). */
 
-/** Shared max width for guided chat column + Compare pricing modal. */
+/** Shared max width for the guided chat column. */
 export const FORM_CHAT_MAX_WIDTH = "max-w-[53rem]";
 export const FORM_CHAT_COLUMN = `mx-auto w-full min-w-0 ${FORM_CHAT_MAX_WIDTH}`;
 /** Single horizontal inset for scroll thread + composer so edges stay aligned. */

@@ -3651,7 +3651,7 @@ export default function ChatIntakeExperience() {
                     <span style={styles.profileDropAvatar}>AE</span>
                     <div style={{ minWidth: 0 }}>
                       <div style={styles.profileDropName}>Alex Evans</div>
-                      <div style={styles.profileDropEmail}>alex.evans@newpoint.com</div>
+                      <div style={styles.profileDropEmail}>alex.evans@acmemortgage.com</div>
                     </div>
                   </div>
                   <div style={styles.profileAccessRow}>
@@ -3743,7 +3743,7 @@ export default function ChatIntakeExperience() {
                   <button
                     onClick={() => {
                       setProfileMenuOpen(false);
-                      if (window.confirm("Sign out of NewPoint?")) {
+                      if (window.confirm("Sign out of Acme?")) {
                         alert("Signing out — coming soon.");
                       }
                     }}

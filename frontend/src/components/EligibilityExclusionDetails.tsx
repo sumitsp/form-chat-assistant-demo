@@ -1,4 +1,5 @@
 import { formatMortgageAcronyms } from "@/lib/nqmIntegratedForm";
+import { applyProgramNameAlias } from "@/lib/programDisplayHelpers";
 import {
   formatExclusionReason,
   hasExclusionDetails,
@@ -16,7 +17,9 @@ function ExclusionGroup({ title, items }: { title: string; items: ProgramExclusi
       <ul className="mt-1.5 list-none space-y-2 pl-0">
         {items.map((e, i) => (
           <li key={`${e.program_name}-${i}`} className="text-[12px] leading-snug text-foreground">
-            <span className="font-medium">{formatMortgageAcronyms(e.program_name)}</span>
+            <span className="font-medium">
+              {applyProgramNameAlias(formatMortgageAcronyms(e.program_name))}
+            </span>
             <span className="text-muted-foreground"> — </span>
             <span>{formatExclusionReason(e.reason)}</span>
           </li>

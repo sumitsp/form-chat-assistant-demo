@@ -256,7 +256,7 @@ class _PdfCanvas:
         self.y = row_y + row_h
 
     def _draw_footer(self) -> None:
-        text = f"NewPoint Mortgage - Confidential  |  Page {self.page_num}"
+        text = f"Acme Mortgage - Confidential  |  Page {self.page_num}"
         self.page.insert_text(
             (_MARGIN, _page_rect().height - 18),
             text,
@@ -465,7 +465,7 @@ def _render_pdf(body: ScenarioPdfRequest, generated_date: str) -> bytes:
         subtitle += f"  |  {rejected_count} rejected"
 
     cv = _PdfCanvas()
-    cv.doc_header("NewPoint Mortgage - Loan Scenario", subtitle)
+    cv.doc_header("Acme Mortgage - Loan Scenario", subtitle)
 
     cv.section_title("Borrower Profile")
     if body.profile_sections and any(s.rows for s in body.profile_sections):
@@ -494,7 +494,7 @@ def generate_scenario_pdf_bytes(body: ScenarioPdfRequest) -> bytes:
 
 
 def scenario_pdf_filename() -> str:
-    return f"NewPoint-Loan-Scenario-{datetime.now(_ET).strftime('%Y-%m-%d')}.pdf"
+    return f"Acme-Loan-Scenario-{datetime.now(_ET).strftime('%Y-%m-%d')}.pdf"
 
 
 def build_profile_page_html(body: ScenarioPdfRequest, generated_date: str) -> str:
@@ -518,7 +518,7 @@ def _build_full_html_legacy(body: ScenarioPdfRequest, generated_date: str) -> st
         for p in body.programs
     )
     return f"""<!DOCTYPE html><html><body>
-<h1>NewPoint Mortgage — Loan Scenario</h1>
+<h1>Acme Mortgage — Loan Scenario</h1>
 <p>{_esc(generated_date)} · {count} matched</p>
 <h2>Programs</h2>
 <table border="1" cellpadding="6"><tr><th>Program</th><th>Max Loan</th><th>Products</th></tr>{rows}</table>

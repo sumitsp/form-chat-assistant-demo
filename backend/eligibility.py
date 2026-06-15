@@ -1037,7 +1037,7 @@ def _matrix_doc_type_matches_form(matrix_doc: str | None, form_doc: str) -> bool
 
 
 def _display_program_name(row: dict) -> str:
-    """NewPoint program label — prefer program_name_np verbatim (no lender prefix)."""
+    """Acme program label — prefer program_name_np verbatim (no lender prefix)."""
     return (row.get("program_name_np") or "").strip() or (row.get("program_name") or "").strip()
 
 
@@ -2939,7 +2939,7 @@ def _exclusions_from_blocked(
 # Pure-LLM geographic restriction layer (single source of truth for form + chat).
 #
 # Two steps, no hardcoded rule parsing:
-#   Step 1 (deterministic) — NewPoint's overall licensing footprint. A state is
+#   Step 1 (deterministic) — Acme's overall licensing footprint. A state is
 #     eligible iff it appears in map_geographic_restrictions with
 #     restriction_type='eligible_state' AND restriction_detail='Eligible lending
 #     state'. A scenario in any other state is a hard no for every program.
@@ -2952,7 +2952,7 @@ def _exclusions_from_blocked(
 
 
 def _eligible_state_set(conn: Any) -> set[str]:
-    """Overall set of states NewPoint is licensed in (Step 1 allowlist)."""
+    """Overall set of states Acme is licensed in (Step 1 allowlist)."""
     try:
         rows = conn.execute(
             text(
@@ -3125,7 +3125,7 @@ def _layer5_geo(
     # ── Step 1 — overall state allowlist (deterministic) ──────────────────
     eligible = _eligible_state_set(conn)
     if eligible and state not in eligible:
-        reason = f"NewPoint is not licensed to lend in {state}."
+        reason = f"Acme is not licensed to lend in {state}."
         for c in candidates:
             geo_blocked[int(c["program_id"])] = reason
         return [], geo_blocked, overlay_notes
@@ -5871,7 +5871,7 @@ def evaluate_geo(data: dict[str, Any]) -> dict[str, Any]:
     Deterministic only. The detailed, per-program geo filtering is the LLM layer
     in ``_layer5_geo`` (the single source of truth for both form and chat). Here
     we only:
-      1. enforce the NewPoint state-licensing allowlist (Step 1) as a hard block, and
+      1. enforce the Acme state-licensing allowlist (Step 1) as a hard block, and
       2. report whether the state carries any location restrictions, so the UI
          never runs a second, parallel rules engine.
 
@@ -5902,9 +5902,9 @@ def evaluate_geo(data: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         eligible, has_rows = set(), False
 
-    # Step 1 — NewPoint licensing footprint (same allowlist the engine uses).
+    # Step 1 — Acme licensing footprint (same allowlist the engine uses).
     if eligible and state not in eligible:
-        msg = f"NewPoint is not licensed to lend in {state}."
+        msg = f"Acme is not licensed to lend in {state}."
         return {
             "complete": complete,
             "warnings": [{"message": msg, "severity": "error"}],

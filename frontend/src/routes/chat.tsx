@@ -28,7 +28,7 @@ export const Route = createFileRoute("/chat")({
   component: ChatPage,
   head: () => ({
     meta: [
-      { title: "NewPoint Mortgage Assistant — Chat" },
+      { title: "Acme Mortgage Assistant — Chat" },
       {
         name: "description",
         content: "Mortgage eligibility assistant — conversational chat mode.",

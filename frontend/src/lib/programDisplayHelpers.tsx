@@ -1,8 +1,6 @@
 import { useMemo } from "react";
-import type { HTMLAttributes, ReactNode } from "react";
-import { ChevronLeft } from "lucide-react";
+import type { ReactNode } from "react";
 
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
   buildPreferredProductSet,
@@ -59,86 +57,6 @@ export function filterNotesForSummarize(notes: string[]): string[] {
 
 export const KNOW_MORE_FOLLOWUP_TEXT =
   'Ask follow-up questions in the chat below or type "Exit" or "Back to Programs Summary" to return to the program summary.';
-
-/** Shown after the user clicks Check pricing on a program Know More card (or types a pricing question in chat). */
-export const PRICING_COMING_SOON_TEXT =
-  "Live program pricing isn't available in the assistant yet—we're building that next. " +
-  "For now, use the suggested questions or type your own to explore documentation, " +
-  "geo restrictions, and credit-event guidelines for this program.";
-
-/** Plain-text copy for clipboard / message actions. */
-export function loanpassPricingUnavailableCopyText(programLabel: string): string {
-  const label = programLabel.trim() || "this program";
-  return (
-    `Live pricing isn't available for ${label} yet. ` +
-    "Try one of the suggested questions below, or type your own about documentation, " +
-    "geo restrictions, or credit guidelines for this program."
-  );
-}
-
-/** dim_programs.program_name_loanpass is null — LoanPASS mapping not configured. */
-export function LoanpassPricingUnavailableNotice({
-  programLabel,
-  onBackToProgramSummary,
-  className,
-  ...rest
-}: {
-  programLabel: string;
-  onBackToProgramSummary?: () => void;
-  className?: string;
-} & HTMLAttributes<HTMLDivElement>) {
-  const label = programLabel.trim() || "this program";
-  return (
-    <div
-      className={cn(
-        "rounded-lg border border-slate-200/90 bg-slate-50 px-3 py-2.5 dark:border-slate-700/60 dark:bg-slate-900/40",
-        className,
-      )}
-      {...rest}
-    >
-      <p className="text-[13px] leading-relaxed text-foreground">
-        Live pricing isn&apos;t available for{" "}
-        <strong className="font-semibold text-[#012a5b] dark:text-sky-300">{label}</strong> yet.
-      </p>
-      <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">
-        Try one of the suggested questions below, or type your own about documentation, geo
-        restrictions, or credit guidelines for this program.
-      </p>
-      {onBackToProgramSummary ? (
-        <div className="mt-3 border-t border-border/60 pt-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onBackToProgramSummary}
-            className="gap-1.5 text-[13px]"
-          >
-            <ChevronLeft className="h-4 w-4" aria-hidden="true" />
-            Back to Program Summary
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-export function PricingComingSoonNotice({
-  className,
-  ...rest
-}: { className?: string } & HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div
-      className={cn(
-        "rounded-lg border border-amber-200/90 bg-amber-50 px-3 py-2.5 dark:border-amber-900/50 dark:bg-amber-950/30",
-        className,
-      )}
-      {...rest}
-    >
-      <p className="text-[13px] leading-relaxed text-amber-950 dark:text-amber-100">
-        {PRICING_COMING_SOON_TEXT}
-      </p>
-    </div>
-  );
-}
 
 /** Know More card footer — action chips sit above this line. */
 export function KnowMoreFollowupHint({ className }: { className?: string }) {
@@ -338,13 +256,32 @@ export function programTitleOnly(prog: {
   return stripDuplicatedLenderPrefix(name, investor);
 }
 
+/**
+ * Internal lender-brand display aliases. The underlying data still uses the real
+ * lender names (Denali / Summit / Everest); these are only swapped in at the
+ * display layer so program names render as their alias, product names unchanged
+ * (e.g. "Denali Prime Plus" → "Mercury Prime Plus").
+ */
+const PROGRAM_NAME_ALIASES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\bDenali\b/gi, "Mercury"],
+  [/\bSummit\b/gi, "Venus"],
+  [/\bEverest\b/gi, "Mars"],
+];
+
+/** Swap real lender names for their internal display alias (whole-word, case-insensitive). */
+export function applyProgramNameAlias(name: string): string {
+  let out = name;
+  for (const [pattern, alias] of PROGRAM_NAME_ALIASES) out = out.replace(pattern, alias);
+  return out;
+}
+
 /** Table/API label: program_name_np as stored (no lender-prefix stripping). */
 export function programDisplayName(prog: {
   program_name_np?: string | null;
   program_name?: string | null;
 }): string {
   const raw = (prog.program_name_np || prog.program_name || "").trim();
-  return raw ? formatMortgageAcronyms(raw) : "Program";
+  return raw ? applyProgramNameAlias(formatMortgageAcronyms(raw)) : "Program";
 }
 
 type ProgramGateMetrics = {

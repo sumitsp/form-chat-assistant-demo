@@ -19,14 +19,14 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { NEWPOINT_LOGO_URL } from "@/lib/brand";
+import { BRAND_LOGO_URL } from "@/lib/brand";
 import { fetchFormHistoryList } from "@/lib/scenarioHistoryApi";
 
 // Placeholder identity — no auth/user system yet. Swap for real session data
 // when authentication lands.
 const PROFILE = {
   name: "Alex Evans",
-  email: "alex.evans@newpoint.com",
+  email: "alex.evans@acmemortgage.com",
   accessType: "Loan Officer",
   initials: "AE",
 };
@@ -109,16 +109,16 @@ export function AppHeader({
       <header className="sticky top-0 z-20 border-b border-border bg-surface-elevated/80 pt-[env(safe-area-inset-top,0px)] backdrop-blur-xl">
         <div className="flex w-full items-center justify-between gap-1.5 px-3 py-2 sm:gap-3 sm:px-8 sm:py-3">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-3">
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden bg-white sm:h-9 sm:w-9">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center sm:h-10 sm:w-10">
               <img
-                src={NEWPOINT_LOGO_URL}
-                alt="NewPoint Mortgage"
+                src={BRAND_LOGO_URL}
+                alt="Acme Mortgage"
                 className="h-full w-full object-contain"
               />
             </div>
             <div className="min-w-0 leading-tight">
               <div className="truncate font-display text-[12px] font-semibold sm:text-base">
-                NewPoint Mortgage Assistant
+                Acme Mortgage Assistant
               </div>
               <div className="hidden text-[13px] text-muted-foreground md:block">
                 Your hub for broker matrices, program guidances and overlays.

@@ -1,9 +1,8 @@
 /**
  * FormChatFlow results transcript — message kinds + pure helpers for the post-eligibility
- * state machine (Know More, RAG, LoanPASS, exclusions).
+ * state machine (Know More, RAG, exclusions).
  */
 import type { EligibleProgram } from "@/components/wizard/loanWizardEligibility";
-import type { LoanpassDbProduct, LoanpassPricingPayload } from "@/lib/loanpass/pricingTable";
 import { isScenarioNotesSkipMessage } from "@/lib/sessionNotes";
 
 /** Shown when leaving Know More / exclusions back to the results table. */
@@ -24,8 +23,7 @@ export type FormChatResultsMessage =
       id: string;
       paragraphs?: readonly string[];
       text?: string;
-      variant?: "thinking" | "default" | "loanpass-unavailable";
-      programLabel?: string;
+      variant?: "thinking" | "default";
       thinkingLabel?: string;
       thinkingLabels?: readonly string[];
       ragReply?: boolean;
@@ -34,18 +32,6 @@ export type FormChatResultsMessage =
   | { kind: "results"; id: string; programs: EligibleProgram[] }
   | { kind: "suggestion"; id: string }
   | { kind: "program-detail"; id: string; program: EligibleProgram }
-  | {
-      kind: "loanpass-products";
-      id: string;
-      program: EligibleProgram;
-      products: LoanpassDbProduct[];
-    }
-  | {
-      kind: "loanpass-pricing";
-      id: string;
-      payload: LoanpassPricingPayload;
-      fromProductPicker?: boolean;
-    }
   | { kind: "exclusions"; id: string };
 
 /** Rebuild the full post-submit chat tail after a tab refresh (skip streaming gate). */
@@ -66,8 +52,6 @@ export function isResultsConversationMsg(msg: FormChatResultsMessage): boolean {
     msg.kind === "results" ||
     msg.kind === "suggestion" ||
     msg.kind === "program-detail" ||
-    msg.kind === "loanpass-products" ||
-    msg.kind === "loanpass-pricing" ||
     msg.kind === "exclusions"
   ) {
     return true;
@@ -149,12 +133,6 @@ export function isResultsNavigationCommand(text: string): boolean {
   if (/^exit$/i.test(t)) return true;
   if (t === "back to programs summary" || t === "back to program summary") return true;
   return isScenarioNotesSkipMessage(text);
-}
-
-/** From LoanPASS pricing view → product picker (when opened via Check pricing). */
-export function isBackToLoanpassProductsCommand(text: string): boolean {
-  const t = text.trim().toLowerCase();
-  return t === "back to product" || t === "back to products";
 }
 
 export function lastMessageIdOfKind(

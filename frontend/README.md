@@ -6,7 +6,7 @@ Run from **repo root** (dependencies install via root `package.json`):
 
 ```bash
 npm ci
-npm run dev      # port 5173, proxies /api → localhost:8080
+npm run dev      # port 5173, proxies /api → localhost:8000
 npm run build
 npm run lint
 npm run format   # after editing .tsx files

@@ -464,11 +464,11 @@ def _format_geo_restrictions_reply(
             return (
                 f"No state-specific geographic restriction rows are loaded for {display} "
                 f"in {focus_state}. Other states may still have restrictions — ask without a "
-                f"single-state scenario or contact a NewPoint representative."
+                f"single-state scenario or contact an Acme representative."
             )
         return (
             f"No geographic restriction rows are loaded for {display} in the database. "
-            "Please contact a NewPoint representative."
+            "Please contact an Acme representative."
         )
 
     from collections import defaultdict
@@ -3028,7 +3028,7 @@ def _chat_selected_program_strict(
             reply = (
                 "I don't have live rate-sheet data in the indexed documents, so I can't quote today's interest rate. "
                 "I can still explain eligibility and structure options from the retrieved guidelines and matrices. "
-                "For exact pricing, please contact a NewPoint representative."
+                "For exact pricing, please contact an Acme representative."
             )
         else:
             reply = _strip_citations_and_sources(_clean_answer_text(reply))
@@ -3301,7 +3301,7 @@ def _chat_all_programs_general(
             reply = (
                 "I don't have live rate-sheet data in the indexed documents, so I can't quote today's interest rate. "
                 "I can still explain eligibility and structure options from the retrieved guidelines and matrices. "
-                "For exact pricing, please contact a NewPoint representative."
+                "For exact pricing, please contact an Acme representative."
             )
         else:
             reply = _strip_citations_and_sources(_clean_answer_text(reply))

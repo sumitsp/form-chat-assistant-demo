@@ -107,7 +107,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").strip().upper()
 # LOG_API_IO=0 in any shared/production environment.
 LOG_API_IO = os.getenv("LOG_API_IO", "1").strip().lower() in {"1", "true", "yes", "on"}
 
-# Write /api/* request + response payloads to logs/api_io_*.json (like LoanPASS pricing logs).
+# Write /api/* request + response payloads to logs/api_io_*.json.
 # OFF by default — enable with LOG_API_IO_FILE=1. ⚠️ Contains PII.
 LOG_API_IO_TO_FILE = os.getenv("LOG_API_IO_FILE", "").strip().lower() in {
     "1",
@@ -129,30 +129,6 @@ ELIGIBILITY_TRACE_TO_FILE = os.getenv("ELIGIBILITY_TRACE", "").strip().lower() i
 }
 # When file logging is on, keep only the most recent N trace files in logs/.
 ELIGIBILITY_TRACE_KEEP = int(os.getenv("ELIGIBILITY_TRACE_KEEP", "50"))
-
-# LoanPASS pricing payload/response FILE logging (logs/loanpass_pricing_*.json).
-# OFF by default — enable with LOANPASS_PRICING_LOG=1 to verify API hits.
-LOANPASS_PRICING_LOG_TO_FILE = os.getenv("LOANPASS_PRICING_LOG", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-LOANPASS_PRICING_LOG_KEEP = int(os.getenv("LOANPASS_PRICING_LOG_KEEP", "50"))
-
-# Focus lock period sent to LoanPASS and shown in the pricing grid (days).
-LOANPASS_FOCUS_LOCK_DAYS = int(os.getenv("LOANPASS_FOCUS_LOCK_DAYS", "30"))
-
-# Pricing now lives in its OWN service (backend/pricing_app.py) so LoanPASS can be
-# restarted independently. Set MOUNT_PRICING_INLINE=1 to also serve /api/loanpass/*
-# from the main API (single-process dev convenience). Default OFF.
-MOUNT_PRICING_INLINE = os.getenv("MOUNT_PRICING_INLINE", "").strip().lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
-
 
 def program_slug(name: str) -> str:
     """

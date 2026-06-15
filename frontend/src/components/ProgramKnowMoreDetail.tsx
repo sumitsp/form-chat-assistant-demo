@@ -24,11 +24,6 @@ import {
   shouldStyleProductMismatch,
   type ProductDisplayPrefs,
 } from "@/lib/nqmIntegratedForm";
-import {
-  ProductPriceChip,
-  type ProductParPrice,
-  type ProductPriceFetcher,
-} from "@/components/wizard/shared/results";
 import { cn } from "@/lib/utils";
 
 export type ScenarioSnapshot = {
@@ -112,9 +107,6 @@ type Props = {
   hideTitle?: boolean;
   /** When false, caller renders follow-up / Exit hint after action chips (FormChatFlow). */
   showFollowupHint?: boolean;
-  /** Par-price hover chips on product names (FormChatFlow results). */
-  productPrices?: Record<string, ProductParPrice | null>;
-  onProductPrice?: ProductPriceFetcher;
 };
 
 const STREAM_MS_PER_ITEM = 120;
@@ -144,8 +136,6 @@ export function ProgramKnowMoreDetail({
   scenario,
   hideTitle = false,
   showFollowupHint = true,
-  productPrices,
-  onProductPrice,
 }: Props) {
   const programName = programDisplayName(prog);
   const docsDisplay = getProgramDocsDisplay(prog);
@@ -621,30 +611,15 @@ export function ProgramKnowMoreDetail({
       {showProductsBlock && (
         <div>
           <div className={PROGRAM_CHAT_SECTION_LABEL_CLASS}>Products Available</div>
-          {onProductPrice ? (
-            <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              {visibleProductItems.slice(0, productsShown).map((name) => (
-                <ProductPriceChip
-                  key={name}
-                  program={prog}
-                  label={name}
-                  prices={productPrices}
-                  onProductPrice={onProductPrice}
-                />
-              ))}
-              <StreamCursor active={productsStreaming} />
-            </div>
-          ) : (
-            <p className="leading-snug text-foreground">
-              {visibleProductItems.slice(0, productsShown).map((name, pi) => (
-                <span key={pi}>
-                  {pi > 0 && <span className="text-muted-foreground">{UI_LIST_SEPARATOR}</span>}
-                  <span>{name}</span>
-                </span>
-              ))}
-              <StreamCursor active={productsStreaming} />
-            </p>
-          )}
+          <p className="leading-snug text-foreground">
+            {visibleProductItems.slice(0, productsShown).map((name, pi) => (
+              <span key={pi}>
+                {pi > 0 && <span className="text-muted-foreground">{UI_LIST_SEPARATOR}</span>}
+                <span>{name}</span>
+              </span>
+            ))}
+            <StreamCursor active={productsStreaming} />
+          </p>
         </div>
       )}
 

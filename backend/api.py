@@ -99,15 +99,6 @@ app.include_router(_geo_router)
 app.include_router(eligibility_routes.router)
 app.include_router(form_history_routes.router)
 
-# LoanPASS pricing runs as its own service (backend/pricing_app.py) so it can be
-# restarted independently. For single-process dev, set MOUNT_PRICING_INLINE=1 to
-# also serve /api/loanpass/* from here.
-if config.MOUNT_PRICING_INLINE:
-    from backend.loanpass_routes import router as _loanpass_router  # noqa: E402
-
-    app.include_router(_loanpass_router)
-    _log.info("LoanPASS pricing mounted INLINE (MOUNT_PRICING_INLINE=1).")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$|^https?://newpointassist\.algodel\.com(:\d+)?$",

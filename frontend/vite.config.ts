@@ -15,15 +15,8 @@ export default defineConfig({
     host: true,
     allowedHosts: ["newpointassist.algodel.com"],
     proxy: {
-      // LoanPASS pricing is its own service (backend/pricing_app.py, default port
-      // 8090) so it can be restarted independently. Must be listed BEFORE "/api"
-      // so the more specific prefix wins.
-      "/api/loanpass": {
-        target: process.env.VITE_PRICING_PROXY_TARGET || "http://127.0.0.1:8090",
-        changeOrigin: true,
-      },
       "/api": {
-        target: "http://127.0.0.1:8080",
+        target: "http://127.0.0.1:8000",
         changeOrigin: true,
       },
     },

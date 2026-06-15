@@ -1,11 +1,9 @@
-/** NewPoint brand assets shared across the app. */
+/** Acme brand assets shared across the app. */
 
-/** Header / favicon mark. */
-export const NEWPOINT_LOGO_URL =
-  "https://newpointmortgage.com/wp-content/uploads/2021/07/cropped-top-logo-1-32x32.png";
+/** Header / favicon mark. Served from the public/ folder. */
+export const BRAND_LOGO_URL = "/acme_logo.svg";
 
 /**
- * Chat assistant avatar. Served from the public/ folder — drop
- * `newpoint_chatbot_logo_D_chat_n.svg` into `frontend/public/`.
+ * Chat assistant avatar. Served from the public/ folder.
  */
-export const NEWPOINT_CHATBOT_LOGO_URL = "/newpoint_chatbot_logo_D_chat_n.svg";
+export const BRAND_CHATBOT_LOGO_URL = "/acme_logo.svg";

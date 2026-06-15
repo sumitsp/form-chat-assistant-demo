@@ -106,7 +106,7 @@ export function buildScenarioPdfHtml(
 ): string {
   const profileHtml = buildProfileHtml(profileSections);
   const programsHtml = buildProgramsHtml(programs, productPrefs);
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>NewPoint Mortgage — Loan Scenario</title>
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Acme Mortgage — Loan Scenario</title>
     <style>
       *{box-sizing:border-box;margin:0;padding:0}
       body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111;padding:0;margin:0}
@@ -134,12 +134,12 @@ export function buildScenarioPdfHtml(
       }
     </style></head><body>
     <section class="pdf-page pdf-profile-page">
-      <header><h1>NewPoint Mortgage — Loan Scenario</h1><span>Generated ${escapeHtml(generatedDate)}</span></header>
+      <header><h1>Acme Mortgage — Loan Scenario</h1><span>Generated ${escapeHtml(generatedDate)}</span></header>
       <h2>Borrower Profile</h2>
       ${profileHtml}
     </section>
     <section class="pdf-page pdf-programs-page">
-      <header><h1>NewPoint Mortgage — Loan Scenario</h1><span>Generated ${escapeHtml(generatedDate)}</span></header>
+      <header><h1>Acme Mortgage — Loan Scenario</h1><span>Generated ${escapeHtml(generatedDate)}</span></header>
       <h2>Program Scenarios (${programs.length})</h2>
       ${programsHtml}
     </section>
@@ -217,7 +217,7 @@ async function sharePdfBlob(blob: Blob, filename: string): Promise<boolean> {
   const file = new File([blob], filename, { type: "application/pdf" });
   if (!navigator.share || !navigator.canShare?.({ files: [file] })) return false;
   try {
-    await navigator.share({ files: [file], title: "NewPoint Loan Scenario" });
+    await navigator.share({ files: [file], title: "Acme Loan Scenario" });
     return true;
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") return true;
@@ -266,7 +266,7 @@ export async function downloadScenarioPdf(
     if (!blob.size) return false;
     const filename =
       parseFilenameFromDisposition(res.headers.get("Content-Disposition")) ||
-      `NewPoint-Loan-Scenario-${new Date().toISOString().slice(0, 10)}.pdf`;
+      `Acme-Loan-Scenario-${new Date().toISOString().slice(0, 10)}.pdf`;
 
     if (isMobilePdfEnvironment()) {
       if (openBlobInWindow(options?.mobilePreviewWindow ?? null, blob)) return "opened";

@@ -36,7 +36,7 @@ export const Route = createFileRoute("/form")({
   component: FormPage,
   head: () => ({
     meta: [
-      { title: "NewPoint Mortgage Assistant — Form" },
+      { title: "Acme Mortgage Assistant — Form" },
       { name: "description", content: "Mortgage eligibility wizard — step-by-step form." },
     ],
   }),

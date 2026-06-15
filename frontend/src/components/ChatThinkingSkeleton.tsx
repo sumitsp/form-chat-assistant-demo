@@ -150,21 +150,6 @@ export const ELIGIBILITY_RELOAD_LABELS = [
   "Almost done",
 ] as const;
 
-/** LoanPASS — loading product types before the picker. */
-export const LOANPASS_PRODUCT_THINKING_LABELS = [
-  "Connecting to Engine",
-  "Loading product types",
-  "Preparing pricing options",
-] as const;
-
-/** LoanPASS — fetching indicative pricing for a selected product. */
-export const LOANPASS_PRICING_THINKING_LABELS = [
-  "Connecting to Engine",
-  "Fetching pricing scenarios",
-  "Building rate table",
-  "Finalizing quotes",
-] as const;
-
 type ChatThinkingSkeletonProps = {
   /** Fixed label; when omitted, progresses through `labels` or CHAT_THINKING_LABELS. */
   label?: string;

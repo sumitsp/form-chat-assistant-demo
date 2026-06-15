@@ -6,8 +6,7 @@
   "scripts": {
     "clean:macos": "bash scripts/clean_appledouble.sh",
     "clean:logs": "python -m backend.tools.clean_logs",
-    "dev:api": "uvicorn backend.api:app --reload --host 0.0.0.0 --port 8080",
-    "dev:pricing": "uvicorn backend.pricing_app:app --reload --host 0.0.0.0 --port 8090",
+    "dev:api": "uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000",
     "dev": "vite dev --config frontend/vite.config.ts",
     "dev:macos": "npm run clean:macos && vite dev --config frontend/vite.config.ts",
     "build": "vite build --config frontend/vite.config.ts",

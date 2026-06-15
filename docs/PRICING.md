@@ -14,13 +14,13 @@ Pricing runs as a **separate FastAPI app** so LoanPASS latency, token refresh, o
 
 | Process | Port | Routes |
 |---|---|---|
-| Main API | 8080 | `/api/eligibility`, `/api/chat`, … |
-| Pricing service | 8090 | `/api/loanpass/*` |
-| Vite dev proxy | 5173 | `/api/loanpass` → 8090, other `/api` → 8080 |
+| Main API | 8000 | `/api/eligibility`, `/api/chat`, … |
+| Pricing service | 8001 | `/api/loanpass/*` |
+| Vite dev proxy | 5173 | `/api/loanpass` → 8001, other `/api` → 8000 |
 
 Docker: supervisord runs api + pricing + frontend + a **watchdog** that restarts pricing if `/api/loanpass/health` fails.
 
-Single-process dev: set **`MOUNT_PRICING_INLINE=1`** to mount the same router on the main API (8080).
+Single-process dev: set **`MOUNT_PRICING_INLINE=1`** to mount the same router on the main API (8000).
 
 ## Request flow
 
@@ -56,7 +56,7 @@ Optional:
 
 ```bash
 npm run dev:pricing                                    # local
-curl http://localhost:8090/api/loanpass/health         # health
+curl http://localhost:8001/api/loanpass/health         # health
 docker exec <container> supervisorctl restart pricing   # Docker bounce
 ```
 

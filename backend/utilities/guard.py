@@ -109,7 +109,7 @@ _DOMAIN_RE = re.compile(
     r"bank\s*statements?|statements?|"
     r"geo(?:graphic)?|geographic|restriction|restrictions|state|states|county|"
     r"escrow|waiver|waivers|"
-    r"denali|everest|summit|deephaven|verus|newpoint|lenders?|matrix|"
+    r"denali|everest|summit|deephaven|verus|acme|lenders?|matrix|"
     r"documentation\s+type|doc\s+type|product|products|seasoning|housing"
     r")\b",
     re.IGNORECASE,

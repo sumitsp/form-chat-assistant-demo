@@ -6,21 +6,12 @@
  * intake's form mode for the session (see lib/access.ts).
  */
 import { type FC, type FormEvent, useState } from "react";
-import {
-  ArrowRight,
-  BarChart3,
-  CircleCheck,
-  CircleDollarSign,
-  Eye,
-  EyeOff,
-  FileText,
-  Lock,
-} from "lucide-react";
+import { ArrowRight, BarChart3, CircleCheck, Eye, EyeOff, FileText, Lock } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { NEWPOINT_LOGO_URL } from "@/lib/brand";
+import { BRAND_LOGO_URL } from "@/lib/brand";
 import { type AccessRole, authenticate } from "@/lib/access";
 
 type Props = {
@@ -35,7 +26,6 @@ type Props = {
 const FEATURES = [
   { icon: CircleCheck, label: "Program\nEligibility" },
   { icon: BarChart3, label: "Product\nComparison" },
-  { icon: CircleDollarSign, label: "Pricing\nInsights" },
   { icon: FileText, label: "Scenario\nAnalysis" },
 ];
 
@@ -126,15 +116,15 @@ export const AccessGate: FC<Props> = ({ onGranted }) => {
         <div className="rounded-2xl border border-slate-200/80 bg-white px-5 py-5 shadow-xl shadow-slate-900/[0.06] sm:px-10 sm:py-10">
           {/* Brand */}
           <div className="flex flex-col items-center text-center">
-            <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-white p-2 shadow-sm ring-1 ring-black/5 sm:mb-3 sm:h-16 sm:w-16 sm:rounded-2xl sm:p-3">
+            <div className="mb-2 flex h-14 w-14 items-center justify-center rounded-2xl bg-white p-1.5 shadow-sm ring-1 ring-black/5 sm:mb-3 sm:h-20 sm:w-20 sm:rounded-3xl sm:p-2.5">
               <img
-                src={NEWPOINT_LOGO_URL}
-                alt="NewPoint Mortgage"
+                src={BRAND_LOGO_URL}
+                alt="Acme Mortgage"
                 className="h-full w-full object-contain"
               />
             </div>
             <h1 className="font-display text-lg font-semibold tracking-tight text-foreground sm:text-2xl">
-              NewPoint Mortgage Assistant
+              Acme Mortgage Assistant
             </h1>
             <p className="mt-1.5 max-w-[18rem] text-balance text-[11px] leading-snug text-muted-foreground sm:mt-3 sm:text-[13px] sm:leading-relaxed">
               Your hub for broker matrices, program guidances and overlays.
@@ -152,7 +142,7 @@ export const AccessGate: FC<Props> = ({ onGranted }) => {
           </button>
 
           {/* Feature list */}
-          <div className="mt-5 grid grid-cols-4 gap-1.5 sm:mt-8 sm:gap-3">
+          <div className="mt-5 grid grid-cols-3 gap-1.5 sm:mt-8 sm:gap-3">
             {FEATURES.map(({ icon: Icon, label }) => (
               <div key={label} className="flex flex-col items-center gap-1 text-center sm:gap-2">
                 <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#eaf1fb] sm:h-12 sm:w-12">

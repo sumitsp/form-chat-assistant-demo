@@ -49,21 +49,17 @@ import {
   ResultsHeadlineBanner,
   SuggestionPills,
   programDetailText,
-  programProductList,
-  productPriceKey,
   resultsHeadlineVariant,
   BACK_TO_RESULTS_LIST_TEXT,
   buildRestoredResultsTail,
   eligibilityResultsHeadline,
   isResultsConversationMsg,
-  isBackToLoanpassProductsCommand,
   isResultsNavigationCommand,
   isViewingResultsSubPanel,
   lastMessageIdOfKind,
   lastResultsMessageIndex,
   programDetailAfterResults,
 } from "@/components/wizard/shared/results";
-import type { ProductParPrice } from "@/components/wizard/shared/results";
 
 import {
   CompactThinkingBubble,
@@ -73,8 +69,6 @@ import {
   ELIGIBILITY_RELOAD_LABELS,
   ELIGIBILITY_RUN_LABEL,
   ELIGIBILITY_THINKING_LABELS,
-  LOANPASS_PRICING_THINKING_LABELS,
-  LOANPASS_PRODUCT_THINKING_LABELS,
   KNOW_MORE_THINKING_LABELS,
   RAG_FOLLOWUP_LABELS,
   stripLoadingEllipsis,
@@ -115,28 +109,6 @@ import {
   type ProductDisplayPrefs,
 } from "@/lib/nqmIntegratedForm";
 import { ProgramKnowMoreDetail, type ScenarioSnapshot } from "@/components/ProgramKnowMoreDetail";
-import {
-  fetchLoanpassPrice,
-  fetchLoanpassProducts,
-  fetchLoanpassProgramMeta,
-} from "@/lib/loanpass/fetchLoanpassPrice";
-import {
-  getVisibleProgramProducts,
-  resolveLoanpassProductByLabel,
-} from "@/lib/loanpass/programProducts";
-import type { LoanpassDbProduct, LoanpassPricingPayload } from "@/lib/loanpass/pricingTable";
-import {
-  formatLoanpassRate,
-  loanpassCellForLock,
-  loanpassFocusLockDays,
-  loanpassSimplifiedCreditDisplay,
-  loanpassSimplifiedDisplayRows,
-} from "@/lib/loanpass/pricingTable";
-import {
-  LoanpassPricingCard,
-  loanpassPricingCopyText,
-} from "@/components/wizard/LoanpassPricingCard";
-import { LoanpassProductPicker } from "@/components/wizard/LoanpassProductPicker";
 import { ResultsPagination } from "@/components/wizard/results/ResultsPagination";
 import { EligibilityExclusionDetails } from "@/components/EligibilityExclusionDetails";
 import type { ProgramExclusion } from "@/lib/eligibilityExclusions";
@@ -163,8 +135,6 @@ import {
 } from "@/lib/formChatLayout";
 import {
   programDisplayName,
-  LoanpassPricingUnavailableNotice,
-  loanpassPricingUnavailableCopyText,
   programGateMetricsLine,
   filterNotesForSummarize,
   limitConsiderationBullets,
@@ -284,15 +254,6 @@ async function summarizeProgramNotes(
       summary_bullets: limitConsiderationBullets(rawNotes),
     };
   }
-}
-
-function isProgramPricingQuestion(text: string): boolean {
-  const lower = text.toLowerCase();
-  return (
-    lower.includes("pricing") ||
-    lower.includes("rate sheet") ||
-    /\b(live rates?|current rates?|price quote|check price)\b/.test(lower)
-  );
 }
 
 /** Pre-start composer hint — enabled once the welcome message finishes streaming. */
@@ -703,9 +664,7 @@ type ChatMessage =
       paragraphs?: readonly string[];
       text?: string;
       /** Compact status bubble (Know More / follow-up RAG). */
-      variant?: "thinking" | "default" | "loanpass-unavailable" | "submit-gate";
-      /** Program name when variant is loanpass-unavailable. */
-      programLabel?: string;
+      variant?: "thinking" | "default" | "submit-gate";
       thinkingLabel?: string;
       /** Cycled status lines while loading (RAG / Know More fetch). */
       thinkingLabels?: readonly string[];
@@ -728,18 +687,6 @@ type ChatMessage =
   | { kind: "results"; id: string; programs: EligibleProgram[] }
   | { kind: "suggestion"; id: string }
   | { kind: "program-detail"; id: string; program: EligibleProgram }
-  | {
-      kind: "loanpass-products";
-      id: string;
-      program: EligibleProgram;
-      products: LoanpassDbProduct[];
-    }
-  | {
-      kind: "loanpass-pricing";
-      id: string;
-      payload: LoanpassPricingPayload;
-      fromProductPicker?: boolean;
-    }
   | { kind: "exclusions"; id: string };
 
 // Minimal shape of the Web Speech API we rely on (avoids depending on lib.dom types).
@@ -850,11 +797,6 @@ export function FormChatFlow({
   priorChatThread?: readonly ChatThreadMsg[];
 }) {
   const includeOptional = mode === "underwriter";
-  const apiBase = (import.meta.env.VITE_API_BASE_URL || "").trim();
-  // LoanPASS pricing is a separate service; in dev it's reached via the Vite
-  // proxy (relative URL → /api/loanpass), in prod point VITE_PRICING_BASE_URL at
-  // the standalone host. Falls back to apiBase when unset.
-  const pricingBase = (import.meta.env.VITE_PRICING_BASE_URL || "").trim() || apiBase;
 
   // Resume mid-intake (e.g. reload) or history restore — skip welcome when form already has data.
   const bootStarted = submitted || isAnswered(form, FORM_CHAT_QUESTIONS[0]);
@@ -966,7 +908,7 @@ export function FormChatFlow({
   /** Sentinel at the end of the thread — scrollIntoView works more reliably on mobile Safari than scrollTop alone. */
   const chatEndRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
-  /** When true, chat scroll stays pinned (LoanPASS pricing / product picker). */
+  /** When true, chat scroll stays pinned to a panel rather than auto-following to bottom. */
   const pinScrollRef = useRef(false);
   const lastScrollTopRef = useRef(0);
   const lastScrollHeightRef = useRef(0);
@@ -1077,403 +1019,6 @@ export function FormChatFlow({
     if (!resultsSubPanelOpen) knowMoreFocusProgramRef.current = null;
   }, [resultsSubPanelOpen]);
 
-  const loanpassPickerRef = useRef<{
-    msgId: string;
-    program: EligibleProgram;
-    products: LoanpassDbProduct[];
-  } | null>(null);
-  const [loanpassProductLoading, setLoanpassProductLoading] = useState<number | null>(null);
-
-  const showLoanpassProductPicker = useCallback(
-    (program: EligibleProgram, products: LoanpassDbProduct[]) => {
-      const msgId = nextId();
-      loanpassPickerRef.current = { msgId, program, products };
-      setMessages((m) => [...m, { kind: "loanpass-products", id: msgId, program, products }]);
-      stickToBottomRef.current = true;
-      scrollToBottom();
-    },
-    [],
-  );
-
-  const loadLoanpassPricing = useCallback(
-    async (program: EligibleProgram, product: LoanpassDbProduct, pickerMsgId?: string) => {
-      setLoanpassProductLoading(product.product_type_id);
-      setAsking(true);
-      const loadingId = nextId();
-      setMessages((m) => [
-        ...m,
-        {
-          kind: "assistant",
-          id: loadingId,
-          variant: "thinking",
-          thinkingLabels: LOANPASS_PRICING_THINKING_LABELS,
-        },
-      ]);
-      stickToBottomRef.current = true;
-      scrollToBottom();
-      try {
-        const result = await fetchLoanpassPrice(pricingBase, form, program, {
-          productLabel: product.product_name,
-          productTypeId: product.product_type_id,
-        });
-        const pricingPayload: LoanpassPricingPayload = {
-          program_name: result.program_name,
-          program_code: result.program_code,
-          breadcrumbs: result.breadcrumbs,
-          product_type_id: result.product_type_id ?? product.product_type_id,
-          product_label: result.product_label ?? product.product_name,
-          loanpass_product_name: result.loanpass_product_name,
-          loanpass_investor: result.loanpass_investor,
-          status: result.status,
-          effective_date: result.effective_date,
-          info_notes: result.info_notes,
-          price_scenarios: result.price_scenarios ?? [],
-          pricing_grid: result.pricing_grid ?? null,
-        };
-        const pricingMsgId = nextId();
-        if (!pickerMsgId) loanpassPickerRef.current = null;
-        stickToBottomRef.current = false;
-        setMessages((m) => [
-          ...m.filter((msg) => msg.id !== pickerMsgId && msg.id !== loadingId),
-          {
-            kind: "loanpass-pricing",
-            id: pricingMsgId,
-            payload: pricingPayload,
-            fromProductPicker: Boolean(pickerMsgId),
-          },
-        ]);
-        scrollLoanpassPanelIntoView(pricingMsgId, "loanpass-pricing");
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "Sorry — pricing could not be loaded.";
-        setMessages((m) => m.filter((x) => x.id !== loadingId));
-        if (
-          msg.toLowerCase().includes("not available") ||
-          msg.toLowerCase().includes("no pricing found")
-        ) {
-          pushLoanpassUnavailable(programDisplayName(program));
-        } else {
-          toast.error(msg);
-        }
-        loanpassPickerRef.current = null;
-        if (pickerMsgId) {
-          setMessages((m) => m.filter((x) => x.id !== pickerMsgId));
-        }
-      } finally {
-        setLoanpassProductLoading(null);
-        setAsking(false);
-      }
-    },
-    [pricingBase, form],
-  );
-
-  // Par pricing (Rate / Rate Cost / Payment) per product, prefetched on results
-  // arrival and temp-stored so hover + compare have zero buffer time.
-  const productPriceCacheRef = useRef<Map<string, ProductParPrice | null>>(new Map());
-  const productPriceInFlightRef = useRef<Map<string, Promise<ProductParPrice | null>>>(new Map());
-  const loanpassProductsByProgramRef = useRef<Map<number, LoanpassDbProduct[]>>(new Map());
-  const loanpassProductsInFlightRef = useRef<Map<number, Promise<LoanpassDbProduct[]>>>(new Map());
-  const [loanpassCatalogs, setLoanpassCatalogs] = useState<
-    Record<number, LoanpassDbProduct[] | undefined>
-  >({});
-  const [productParPrices, setProductParPrices] = useState<Record<string, ProductParPrice | null>>(
-    {},
-  );
-
-  const ensureLoanpassProducts = useCallback(
-    async (program: EligibleProgram): Promise<LoanpassDbProduct[]> => {
-      const pid = program.program_id;
-      if (pid == null) return [];
-      const cached = loanpassProductsByProgramRef.current.get(pid);
-      if (cached) return cached;
-      const inFlight = loanpassProductsInFlightRef.current.get(pid);
-      if (inFlight) return inFlight;
-      const task = (async (): Promise<LoanpassDbProduct[]> => {
-        try {
-          const res = await fetchLoanpassProducts(pricingBase, form, program);
-          const products = res.products ?? [];
-          loanpassProductsByProgramRef.current.set(pid, products);
-          setLoanpassCatalogs((prev) => ({ ...prev, [pid]: products }));
-          return products;
-        } catch {
-          loanpassProductsByProgramRef.current.set(pid, []);
-          setLoanpassCatalogs((prev) => ({ ...prev, [pid]: [] }));
-          return [];
-        } finally {
-          loanpassProductsInFlightRef.current.delete(pid);
-        }
-      })();
-      loanpassProductsInFlightRef.current.set(pid, task);
-      return task;
-    },
-    [pricingBase, form],
-  );
-
-  const loadProductParPrice = useCallback(
-    (
-      program: EligibleProgram,
-      productLabel: string,
-      opts?: { force?: boolean },
-    ): Promise<ProductParPrice | null> => {
-      const key = productPriceKey(program, productLabel);
-      if (opts?.force) {
-        productPriceCacheRef.current.delete(key);
-        setProductParPrices((prev) => {
-          if (!(key in prev)) return prev;
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        });
-      }
-      if (!opts?.force && productPriceCacheRef.current.has(key)) {
-        return Promise.resolve(productPriceCacheRef.current.get(key) ?? null);
-      }
-      const inFlight = productPriceInFlightRef.current.get(key);
-      if (!opts?.force && inFlight) return inFlight;
-      const task = (async (): Promise<ProductParPrice | null> => {
-        let value: ProductParPrice | null = null;
-        try {
-          const catalog = await ensureLoanpassProducts(program);
-          const dbProduct = resolveLoanpassProductByLabel(catalog, productLabel);
-          const result = await fetchLoanpassPrice(pricingBase, form, program, {
-            productLabel: dbProduct?.product_name ?? productLabel,
-            productTypeId: dbProduct?.product_type_id ?? null,
-          });
-          const grid = result.pricing_grid;
-          if (grid) {
-            const focusLock = loanpassFocusLockDays(grid);
-            const rows = loanpassSimplifiedDisplayRows(grid.rates, focusLock);
-            const par = rows[0];
-            if (par) {
-              const parCell = focusLock != null ? loanpassCellForLock(par, focusLock) : null;
-              // Rows are par-first then descending → last = lowest rate (max buydown).
-              const min = rows[rows.length - 1];
-              const minCell = focusLock != null ? loanpassCellForLock(min, focusLock) : null;
-              value = {
-                rate: formatLoanpassRate(par.rate_display),
-                rateCost: loanpassSimplifiedCreditDisplay(parCell),
-                payment: parCell?.available ? (parCell.final_est_payment ?? "—") : "—",
-                minRate: formatLoanpassRate(min.rate_display),
-                minRateCost: loanpassSimplifiedCreditDisplay(minCell),
-              };
-            }
-          }
-          productPriceCacheRef.current.set(key, value);
-          setProductParPrices((prev) => ({ ...prev, [key]: value }));
-        } catch (err) {
-          // Catalog is warmed before pricing, so a "no pricing"/"no product" error
-          // is a definitive unavailable → cache null (hover off + inline red badge).
-          // Config/transient errors stay uncached so compare/hover can retry.
-          const m = err instanceof Error ? err.message.toLowerCase() : "";
-          const definitivelyUnavailable =
-            m.includes("no pricing") ||
-            m.includes("not available") ||
-            m.includes("no product matched") ||
-            m.includes("was not found");
-          if (definitivelyUnavailable) {
-            productPriceCacheRef.current.set(key, null);
-            setProductParPrices((prev) => ({ ...prev, [key]: null }));
-          }
-        } finally {
-          productPriceInFlightRef.current.delete(key);
-        }
-        return value;
-      })();
-      productPriceInFlightRef.current.set(key, task);
-      return task;
-    },
-    [pricingBase, form, ensureLoanpassProducts],
-  );
-
-  const latestResultsPrograms = useMemo<EligibleProgram[] | null>(() => {
-    if (!lastResultsMsgId) return null;
-    const msg = messages.find((m) => m.id === lastResultsMsgId);
-    return msg && msg.kind === "results" ? msg.programs : null;
-  }, [messages, lastResultsMsgId]);
-
-  // True only when every product of the program has resolved to no pricing
-  // (mirrors the inline "Pricing not available" badge in ResultsCard).
-  const programHasNoPricing = useCallback(
-    (program: EligibleProgram): boolean => {
-      const pid = program.program_id;
-      if (pid == null) return true;
-      const catalog = loanpassCatalogs[pid];
-      if (catalog === undefined) return false;
-      const labels = programProductList(program);
-      if (labels.length === 0) return false;
-      return labels.every((label) => !resolveLoanpassProductByLabel(catalog, label));
-    },
-    [loanpassCatalogs],
-  );
-
-  // Warm LoanPASS DB product catalogs as soon as results land (MySQL only — instant availability).
-  useEffect(() => {
-    const programs = latestResultsPrograms;
-    if (!programs?.length) return;
-    productPriceCacheRef.current = new Map();
-    productPriceInFlightRef.current = new Map();
-    loanpassProductsByProgramRef.current = new Map();
-    loanpassProductsInFlightRef.current = new Map();
-    setProductParPrices({});
-    const pending: Record<number, undefined> = {};
-    const programCatalogQueue: EligibleProgram[] = [];
-    const seenPrograms = new Set<number>();
-    for (const program of programs) {
-      const pid = program.program_id;
-      if (pid != null && !seenPrograms.has(pid)) {
-        seenPrograms.add(pid);
-        pending[pid] = undefined;
-        programCatalogQueue.push(program);
-      }
-    }
-    setLoanpassCatalogs(pending);
-    let cancelled = false;
-    const CONCURRENCY = 6;
-    void (async () => {
-      const workers = Array.from(
-        { length: Math.min(CONCURRENCY, programCatalogQueue.length) },
-        async () => {
-          while (!cancelled && programCatalogQueue.length) {
-            const next = programCatalogQueue.shift();
-            if (!next) break;
-            await ensureLoanpassProducts(next);
-          }
-        },
-      );
-      await Promise.all(workers);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [latestResultsPrograms, ensureLoanpassProducts]);
-
-  const requestProgramPricing = useCallback(
-    async (program?: EligibleProgram | null, userLabel?: string) => {
-      const target = program ?? focusedResultsProgram;
-      if (!target) {
-        toast.error("Select a program (Know More) before checking pricing.");
-        return;
-      }
-      const displayName = programDisplayName(target);
-      const label =
-        userLabel?.trim() || (program ? `Check pricing for ${displayName}` : "Check pricing");
-      pinScrollRef.current = false;
-      pushUser(label);
-      pinChatToBottom("smooth");
-
-      const pid = target.program_id;
-      if (pid == null) {
-        pushLoanpassUnavailable(displayName);
-        return;
-      }
-
-      try {
-        const meta = await fetchLoanpassProgramMeta(pricingBase, pid);
-        if (!meta.pricing_available) {
-          pushLoanpassUnavailable(displayName);
-          return;
-        }
-      } catch (err) {
-        pushLoanpassUnavailable(displayName);
-        if (err instanceof Error && !err.message.toLowerCase().includes("not available")) {
-          toast.error(err.message);
-        }
-        return;
-      }
-
-      const loadingId = pushThinkingLine({
-        labels: LOANPASS_PRODUCT_THINKING_LABELS,
-      });
-      setAsking(true);
-      let dbProducts: LoanpassDbProduct[] = [];
-      try {
-        const remote = await fetchLoanpassProducts(pricingBase, form, target);
-        dbProducts = remote.products;
-      } catch (err) {
-        setMessages((m) => [
-          ...m.filter((msg) => msg.id !== loadingId),
-          {
-            kind: "assistant",
-            id: nextId(),
-            text: err instanceof Error ? err.message : "Sorry — products could not be loaded.",
-            ragReply: true,
-          },
-        ]);
-        setAsking(false);
-        return;
-      } finally {
-        setMessages((m) => m.filter((msg) => msg.id !== loadingId));
-        setAsking(false);
-      }
-
-      const visibleNames = new Set(
-        getVisibleProgramProducts(target, productPrefs).map((name) => name.trim().toLowerCase()),
-      );
-      const products =
-        visibleNames.size > 0
-          ? dbProducts.filter((p) => visibleNames.has(p.product_name.trim().toLowerCase()))
-          : dbProducts;
-      const finalProducts = products.length > 0 ? products : dbProducts;
-
-      if (finalProducts.length === 0) {
-        pushAssistant(
-          "No product types are available for this program with your current scenario. Try adjusting product preferences or pick another program.",
-        );
-        return;
-      }
-
-      if (finalProducts.length === 1) {
-        void loadLoanpassPricing(target, finalProducts[0]);
-        return;
-      }
-
-      showLoanpassProductPicker(target, finalProducts);
-    },
-    [
-      pricingBase,
-      form,
-      focusedResultsProgram,
-      loadLoanpassPricing,
-      productPrefs,
-      showLoanpassProductPicker,
-    ],
-  );
-
-  // "View pricing" from the Compare table → fetch the full pricing payload for
-  // that exact program + product so it can render INSIDE the compare modal
-  // (no jump back to the chat thread).
-  const loadComparePricingPayload = useCallback(
-    async (
-      program: EligibleProgram,
-      productLabel: string,
-    ): Promise<LoanpassPricingPayload | null> => {
-      const catalog = await ensureLoanpassProducts(program);
-      const dbProduct = resolveLoanpassProductByLabel(catalog, productLabel);
-      try {
-        const result = await fetchLoanpassPrice(pricingBase, form, program, {
-          productLabel: dbProduct?.product_name ?? productLabel,
-          productTypeId: dbProduct?.product_type_id ?? null,
-        });
-        return {
-          program_name: result.program_name,
-          program_code: result.program_code,
-          breadcrumbs: result.breadcrumbs,
-          product_type_id: result.product_type_id ?? dbProduct?.product_type_id ?? null,
-          product_label: result.product_label ?? dbProduct?.product_name ?? productLabel,
-          loanpass_product_name: result.loanpass_product_name,
-          loanpass_investor: result.loanpass_investor,
-          status: result.status,
-          effective_date: result.effective_date,
-          info_notes: result.info_notes,
-          price_scenarios: result.price_scenarios ?? [],
-          pricing_grid: result.pricing_grid ?? null,
-        };
-      } catch {
-        return null;
-      }
-    },
-    [pricingBase, form, ensureLoanpassProducts],
-  );
-
   const activeExclusionId = useMemo(
     () => (resultsSubPanelOpen ? lastMessageIdOfKind(messages, "exclusions") : null),
     [messages, resultsSubPanelOpen],
@@ -1509,19 +1054,6 @@ export function FormChatFlow({
     const id = nextId();
     setMessages((m) => [...m, { kind: "assistant", id, text }]);
     // Assistant messages always append at the END of the thread — follow them.
-    // (LoanPASS panels pin their own position right after; the deferred scroll
-    // re-checks the pin and stands down.)
-    stickToBottomRef.current = true;
-    scrollToBottom();
-    return id;
-  };
-
-  const pushLoanpassUnavailable = (programLabel: string) => {
-    const id = nextId();
-    setMessages((m) => [
-      ...m,
-      { kind: "assistant", id, variant: "loanpass-unavailable", programLabel },
-    ]);
     stickToBottomRef.current = true;
     scrollToBottom();
     return id;
@@ -1818,35 +1350,6 @@ export function FormChatFlow({
     scrollToBottom();
   };
 
-  const exitLoanpassToResults = (msgId?: string) => {
-    pinScrollRef.current = false;
-    loanpassPickerRef.current = null;
-    setLoanpassProductLoading(null);
-    setMessages((m) =>
-      msgId
-        ? m.filter((msg) => msg.id !== msgId)
-        : m.filter((msg) => msg.kind !== "loanpass-products" && msg.kind !== "loanpass-pricing"),
-    );
-    handleExitProgram();
-  };
-
-  const backToLoanpassProducts = (pricingMsgId: string) => {
-    const picker = loanpassPickerRef.current;
-    if (!picker) return;
-    pinScrollRef.current = false;
-    setLoanpassProductLoading(null);
-    stickToBottomRef.current = false;
-    setMessages((m) => [
-      ...m.filter((msg) => msg.id !== pricingMsgId),
-      {
-        kind: "loanpass-products",
-        id: picker.msgId,
-        program: picker.program,
-        products: picker.products,
-      },
-    ]);
-    scrollLoanpassPanelIntoView(picker.msgId, "loanpass-products");
-  };
   const handleShowExclusions = () => {
     if (isViewingResultsSubPanel(messages)) return;
     pushUser("Understand exclusions");
@@ -1907,11 +1410,6 @@ export function FormChatFlow({
         pushUser(q);
         handleExitProgram();
       }
-      return;
-    }
-
-    if (isProgramPricingQuestion(q)) {
-      void requestProgramPricing(focusedResultsProgram, q);
       return;
     }
 
@@ -2333,36 +1831,13 @@ export function FormChatFlow({
 
   // ANY newly revealed question pulls the thread down — one rule for every reveal
   // path (answer flow, step transition, county/geo re-surface, optional picker).
-  // Edit cards open in place mid-thread, so they're excluded; LoanPASS panels pin
-  // their own scroll position.
+  // Edit cards open in place mid-thread, so they're excluded.
   useEffect(() => {
     if (!currentQ || editingMsgId || editingQId || pinScrollRef.current) return;
     stickToBottomRef.current = true;
     scrollToBottom();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentQ?.id]);
-
-  /** Pin scroll to the top of a LoanPASS panel (pricing table rows stream without auto-follow). */
-  const scrollLoanpassPanelIntoView = (
-    msgId: string,
-    kind: "loanpass-pricing" | "loanpass-products",
-  ) => {
-    pinScrollRef.current = true;
-    stickToBottomRef.current = false;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const container = scrollContainerRef.current;
-        const el = scrollContentRef.current?.querySelector(
-          `[data-loanpass-${kind === "loanpass-pricing" ? "pricing" : "products"}="${msgId}"]`,
-        ) as HTMLElement | null;
-        if (!container || !el) return;
-        const containerRect = container.getBoundingClientRect();
-        const elRect = el.getBoundingClientRect();
-        const targetTop = elRect.top - containerRect.top + container.scrollTop - 8;
-        container.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-      });
-    });
-  };
 
   /** Center the eligible-programs table in the chat viewport (no auto-follow to bottom). */
   const scrollResultsTableIntoView = () => {
@@ -3168,39 +2643,6 @@ export function FormChatFlow({
     const val = chatInput.trim();
     if (!val) return;
 
-    // LoanPASS product picker — letter (A, B…) or number (1, 2…) selects a product type.
-    if (submitted && loanpassPickerRef.current) {
-      const picker = loanpassPickerRef.current;
-      let pickIdx = -1;
-      if (val.length === 1 && /^[A-Za-z]$/.test(val)) {
-        pickIdx = val.toUpperCase().charCodeAt(0) - 65;
-      } else if (/^[1-9]$/.test(val)) {
-        pickIdx = parseInt(val, 10) - 1;
-      }
-      if (pickIdx >= 0 && pickIdx < picker.products.length) {
-        const product = picker.products[pickIdx];
-        setChatInput("");
-        pushUser(/^[1-9]$/.test(val) ? val : val.toUpperCase());
-        void loadLoanpassPricing(picker.program, product, picker.msgId);
-        return;
-      }
-    }
-
-    // LoanPASS pricing → product picker when user types "back to product(s)".
-    if (submitted) {
-      const pricingMsg = [...messages].reverse().find((m) => m.kind === "loanpass-pricing");
-      if (
-        pricingMsg?.kind === "loanpass-pricing" &&
-        pricingMsg.fromProductPicker &&
-        isBackToLoanpassProductsCommand(val)
-      ) {
-        setChatInput("");
-        pushUser(val);
-        backToLoanpassProducts(pricingMsg.id);
-        return;
-      }
-    }
-
     // Know More / exclusions: Exit or Back to Programs Summary returns to the program summary.
     if (submitted && isViewingResultsSubPanel(messages) && isResultsNavigationCommand(val)) {
       setChatInput("");
@@ -3842,26 +3284,6 @@ export function FormChatFlow({
                       />
                     );
                   }
-                  if (msg.variant === "loanpass-unavailable" && msg.programLabel) {
-                    return (
-                      <div key={msg.id} className="w-full">
-                        <BotBubble card>
-                          <LoanpassPricingUnavailableNotice
-                            programLabel={msg.programLabel}
-                            onBackToProgramSummary={() => {
-                              setMessages((m) => m.filter((x) => x.id !== msg.id));
-                              handleExitProgram();
-                            }}
-                          />
-                        </BotBubble>
-                        <ChatMessageActions
-                          copyText={loanpassPricingUnavailableCopyText(msg.programLabel)}
-                          vote={messageFeedback[msg.id] ?? null}
-                          onVoteChange={(v) => setFeedbackVote(msg.id, v)}
-                        />
-                      </div>
-                    );
-                  }
                   return (
                     <FormChatBotRow key={msg.id}>
                       <BotBubble card>
@@ -3948,10 +3370,6 @@ export function FormChatFlow({
                         programs={msg.programs}
                         onKnowMore={handleKnowMore}
                         knowMoreDisabled={resultsSubPanelOpen || msg.id !== lastResultsMsgId}
-                        onProductPrice={loadProductParPrice}
-                        onLoadPricingPayload={loadComparePricingPayload}
-                        loanpassCatalogs={loanpassCatalogs}
-                        productPrices={productParPrices}
                       />
                     </div>
                   );
@@ -4004,8 +3422,6 @@ export function FormChatFlow({
                           prog={msg.program}
                           productPrefs={productPrefs}
                           scenario={scenarioSnapshot}
-                          productPrices={productParPrices}
-                          onProductPrice={loadProductParPrice}
                           hideTitle
                           showFollowupHint={false}
                           onStreamComplete={() => {
@@ -4022,15 +3438,7 @@ export function FormChatFlow({
                             )}
                           >
                             <div className="flex flex-wrap items-center gap-2">
-                              <button
-                                type="button"
-                                disabled={asking || detailStale}
-                                onClick={() => void requestProgramPricing(msg.program)}
-                                className="rounded-lg bg-[#012a5b] px-3 py-1.5 text-[13px] font-medium text-white transition-colors hover:bg-[#01234d] disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                Check pricing
-                              </button>
-                              <span className="text-[12px] text-muted-foreground">or ask:</span>
+                              <span className="text-[12px] text-muted-foreground">Ask:</span>
                               {PROGRAM_FOLLOWUP_QUESTIONS.map((qq) => (
                                 <button
                                   key={qq}
@@ -4057,44 +3465,6 @@ export function FormChatFlow({
                           onVoteChange={(v) => setFeedbackVote(msg.id, v)}
                         />
                       ) : null}
-                    </div>
-                  );
-                }
-                if (msg.kind === "loanpass-products") {
-                  return (
-                    <div
-                      key={msg.id}
-                      data-loanpass-products={msg.id}
-                      className="mt-3 rounded-xl border border-border bg-card p-3 shadow-sm sm:p-4"
-                    >
-                      <LoanpassProductPicker
-                        programName={programDisplayName(msg.program)}
-                        products={msg.products}
-                        loadingProductId={loanpassProductLoading}
-                        onPick={(product) => void loadLoanpassPricing(msg.program, product, msg.id)}
-                        onExit={() => exitLoanpassToResults(msg.id)}
-                      />
-                    </div>
-                  );
-                }
-                if (msg.kind === "loanpass-pricing") {
-                  return (
-                    <div key={msg.id} data-loanpass-pricing={msg.id} className="mt-3 w-full">
-                      <div className="rounded-xl border border-border bg-card p-3 shadow-sm sm:p-4">
-                        <LoanpassPricingCard
-                          payload={msg.payload}
-                          fromProductPicker={msg.fromProductPicker}
-                          onBackToProducts={
-                            msg.fromProductPicker ? () => backToLoanpassProducts(msg.id) : undefined
-                          }
-                          onBackToProgramSummary={() => exitLoanpassToResults(msg.id)}
-                        />
-                      </div>
-                      <ChatMessageActions
-                        copyText={loanpassPricingCopyText(msg.payload)}
-                        vote={messageFeedback[msg.id] ?? null}
-                        onVoteChange={(v) => setFeedbackVote(msg.id, v)}
-                      />
                     </div>
                   );
                 }

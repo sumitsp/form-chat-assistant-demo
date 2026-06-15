@@ -32,9 +32,9 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1, viewport-fit=cover" },
-      { title: "NewPoint Mortgage Assistant" },
+      { title: "Acme Mortgage Assistant" },
       { name: "description", content: "Mortgage assistant chat interface" },
-      { property: "og:title", content: "NewPoint Mortgage Assistant" },
+      { property: "og:title", content: "Acme Mortgage Assistant" },
       { property: "og:description", content: "Mortgage assistant chat interface" },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
@@ -42,12 +42,12 @@ export const Route = createRootRoute({
     links: [
       {
         rel: "icon",
-        type: "image/png",
-        href: "https://newpointmortgage.com/wp-content/uploads/2021/07/cropped-top-logo-1-32x32.png",
+        type: "image/svg+xml",
+        href: "/acme_logo.svg",
       },
       {
         rel: "apple-touch-icon",
-        href: "https://newpointmortgage.com/wp-content/uploads/2021/07/cropped-top-logo-1-32x32.png",
+        href: "/acme_logo.svg",
       },
       {
         rel: "stylesheet",

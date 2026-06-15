@@ -167,7 +167,7 @@ export function ResultsToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <a
-              href="https://newpointmortgage.com/contact/"
+              href="https://acmemortgage.com/contact/"
               target="_blank"
               rel="noreferrer"
               className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-blue-50 hover:text-[#012a5b]"

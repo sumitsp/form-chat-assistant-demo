@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This App Does
 
-AI-powered mortgage eligibility and advisory chatbot for NewPoint Mortgage. Users fill a 5-step loan scenario wizard (or use a conversational chat intake), and the backend matches them against lender programs via two parallel tracks:
+AI-powered mortgage eligibility and advisory chatbot for Acme Mortgage. Users fill a 5-step loan scenario wizard (or use a conversational chat intake), and the backend matches them against lender programs via two parallel tracks:
 
 1. **Structured (MySQL):** deterministic gate-based eligibility matching
 2. **Semantic (Qdrant + OpenAI):** RAG over lender guidelines for follow-up Q&A
@@ -19,12 +19,12 @@ Three supported lenders: Denali/NQM, Everest/Deephaven, Summit/Verus.
 # First-time setup
 python3.12 -m venv venv && source venv/bin/activate && pip install -r requirements.txt
 
-# Run API server (port 8080)  — or: npm run dev:api
-python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8080
+# Run API server (port 8000)  — or: npm run dev:api
+python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 
-# Run LoanPASS pricing service (port 8090) — SEPARATE process so it can be
+# Run LoanPASS pricing service (port 8001) — SEPARATE process so it can be
 # restarted independently of the main API.  — or: npm run dev:pricing
-python -m uvicorn backend.pricing_app:app --reload --host 0.0.0.0 --port 8090
+python -m uvicorn backend.pricing_app:app --reload --host 0.0.0.0 --port 8001
 
 # Quick import-check after editing Python files
 python -c "import backend.api; import backend.pricing_app; import backend.loanpass_routes; import backend.chat.routes; import backend.chat.portfolio; import backend.metrics; print('OK')"
@@ -41,7 +41,7 @@ Run from **repo root** (`package.json` stays at root; app lives in `frontend/`):
 
 ```bash
 npm ci          # install
-npm run dev     # Vite dev server on port 5173 (proxies /api → localhost:8080)
+npm run dev     # Vite dev server on port 5173 (proxies /api → localhost:8000)
 npm run build   # production build
 npm run lint    # ESLint
 npm run format  # Prettier — always run after editing .tsx files (CI enforces it)
@@ -50,7 +50,7 @@ npm run dev:macos  # clean AppleDouble (._*) files first, then dev (use on this 
 
 ### Docker (single container, 4 supervised processes)
 
-One image runs the main API (8080), the LoanPASS pricing service (8090), the
+One image runs the main API (8000), the LoanPASS pricing service (8001), the
 Vite frontend (5173), and a **pricing-watchdog** under **supervisord**
 (`supervisord.conf`). Each program has `autorestart=true`, so a pricing crash
 restarts ONLY pricing — the API + frontend keep running. The watchdog
@@ -61,7 +61,7 @@ token churn). Grep container logs for `PRICING WATCHDOG`.
 
 ```bash
 docker build -t newpoint-assistant .
-docker run --rm -p 5173:5173 -p 8080:8080 -p 8090:8090 --env-file .env newpoint-assistant
+docker run --rm -p 5173:5173 -p 8000:8000 -p 8001:8001 --env-file .env newpoint-assistant
 
 # Restart ONLY the pricing service inside a running container (no API/frontend bounce):
 docker exec <container> supervisorctl restart pricing
@@ -70,7 +70,7 @@ docker exec <container> supervisorctl status   # see all four programs
 
 ### Deployment / CI
 
-**Pushing to `main` auto-deploys to production.** `.github/workflows/deploy-main.yml` triggers on every push to `main`: it SSHes to the prod host, does `git reset --hard origin/main`, then `docker compose up -d --build form-chat-assistant`, and health-checks `http://127.0.0.1:8082/api/health` (host 8082 → container 8080). Treat a merge to `main` as a production release. Required CI secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_PASSWORD`, `DEPLOY_COMPOSE_DIR` (the old `docs/DEPLOY.md` walkthrough is in git history if needed). There is no test/lint CI gate — only the deploy job — so run `npm run lint` / `npm run format` locally before pushing.
+**Pushing to `main` auto-deploys to production.** `.github/workflows/deploy-main.yml` triggers on every push to `main`: it SSHes to the prod host, does `git reset --hard origin/main`, then `docker compose up -d --build form-chat-assistant`, and health-checks `http://127.0.0.1:8082/api/health` (host 8082 → container 8000). Treat a merge to `main` as a production release. Required CI secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_PASSWORD`, `DEPLOY_COMPOSE_DIR` (the old `docs/DEPLOY.md` walkthrough is in git history if needed). There is no test/lint CI gate — only the deploy job — so run `npm run lint` / `npm run format` locally before pushing.
 
 ### Database
 
@@ -134,7 +134,7 @@ Organized by **capability** (vertical slices), not technical layer. Each module 
 ```
 backend/
 ├── api.py                # thin FastAPI entry (uvicorn backend.api:app) — CORS, startup, mounts routers, /api/chat + small endpoints
-├── pricing_app.py        # standalone FastAPI app (uvicorn backend.pricing_app:app, port 8090) — serves ONLY /api/loanpass/* so LoanPASS restarts independently
+├── pricing_app.py        # standalone FastAPI app (uvicorn backend.pricing_app:app, port 8001) — serves ONLY /api/loanpass/* so LoanPASS restarts independently
 ├── loanpass_routes.py    # APIRouter with the LoanPASS pricing endpoints + pydantic models (mounted by pricing_app; inline in api.py only if MOUNT_PRICING_INLINE=1)
 ├── loanpass_client.py    # REST client for the LoanPASS public API (login → execute-summary/execute-product → price); not the iframe
 ├── loanpass_fields.py    # maps a wizard/eligibility form dict → LoanPASS creditApplicationFields
@@ -186,7 +186,7 @@ ingest/
 
 ### API (`backend/api.py`)
 
-FastAPI app on port 8080. Key endpoints:
+FastAPI app on port 8000. Key endpoints:
 
 - `POST /api/eligibility` — full MySQL + Qdrant eligibility; returns matched programs + geo/overlay exclusion lists + RAG notes
 - `POST /api/eligibility/quick` — SQL-only scan (no Qdrant); used for real-time sidebar counts while the form is being filled
@@ -195,7 +195,7 @@ FastAPI app on port 8080. Key endpoints:
 - `POST /api/scenario/pdf` — server-side PDF (PyMuPDF)
 - `POST /api/parse-loan-form` — upload a 1003 PDF or Fannie MISMO 3.4 XML/HTML → wizard field dict (`backend/form_import.py`; client side: `lib/parseLoanFormApi.ts` → `loanFormToWizardPatch.ts`). Sample inputs live in `forms/`.
 - `POST /api/parse-scenario` / `POST /api/extract-scenario` / `POST /api/scenario-notes/extract` — free-text → structured scenario / field deltas / session notes
-- **LoanPASS pricing (port 8090, `backend/loanpass_routes.py`):** `GET /api/loanpass/program/{id}`, `POST /api/loanpass/products`, `POST /api/loanpass/price` — REST client in `loanpass_client.py`, form→field mapping in `loanpass_fields.py`
+- **LoanPASS pricing (port 8001, `backend/loanpass_routes.py`):** `GET /api/loanpass/program/{id}`, `POST /api/loanpass/products`, `POST /api/loanpass/price` — REST client in `loanpass_client.py`, form→field mapping in `loanpass_fields.py`
 
 **Server-side chat intake (`/api/intake/*`)** — mounted from `backend/chat/routes.py`. **Note:** the frontend now drives `/chat` client-side and calls only `/api/intake/extract`; the planner endpoints below (`start`/`message`/`preview`/`submit`/`chip_answer`/…) still exist and work but are no longer called by the UI.
 
@@ -386,7 +386,7 @@ Pure MySQL queries: filters `ltv_matrix` by LTV/CLTV, loan amount, FICO, DTI/DSC
 - **`portfolio_to_eligibility_request()` must map every slot** that the eligibility engine needs. When adding a slot that affects eligibility, add its mapping to this function.
 - **Always run `npm run format`** after editing `.tsx` files — Prettier is enforced on CI.
 - **Python 3.13 not supported**; use 3.12.
-- **Three servers run locally** — Vite proxies `/api/loanpass/*` → `localhost:8090` (pricing service, `backend.pricing_app`) and all other `/api/*` → `localhost:8080` (main API). Run `npm run dev:api`, `npm run dev:pricing`, and `npm run dev`. The proxy lists `/api/loanpass` BEFORE `/api` so the specific prefix wins. Set `MOUNT_PRICING_INLINE=1` to fold pricing back into the main API for single-process dev; prod can instead point `VITE_PRICING_BASE_URL` at a separate pricing host.
+- **Three servers run locally** — Vite proxies `/api/loanpass/*` → `localhost:8001` (pricing service, `backend.pricing_app`) and all other `/api/*` → `localhost:8000` (main API). Run `npm run dev:api`, `npm run dev:pricing`, and `npm run dev`. The proxy lists `/api/loanpass` BEFORE `/api` so the specific prefix wins. Set `MOUNT_PRICING_INLINE=1` to fold pricing back into the main API for single-process dev; prod can instead point `VITE_PRICING_BASE_URL` at a separate pricing host.
 - macOS `._*` sidecar files are filtered in `backend/api.py` startup to prevent venv import errors.
 
 ## Reference Docs (plain-language, layman-facing)

@@ -423,7 +423,7 @@ def _matrix_doc_type_matches_form(matrix_doc: str | None, form_doc: str) -> bool
 
 
 def _display_program_name(row: dict) -> str:
-    """NewPoint program label — prefer program_name_np verbatim (no lender prefix)."""
+    """Acme program label — prefer program_name_np verbatim (no lender prefix)."""
     return (row.get("program_name_np") or "").strip() or (row.get("program_name") or "").strip()
 
 

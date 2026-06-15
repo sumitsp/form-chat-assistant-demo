@@ -3620,7 +3620,7 @@ export const LoanWizard: FC<{
       } catch {
         throw new Error(
           res.status === 0 || res.type === "error"
-            ? "Cannot reach the API server. Make sure the backend is running on port 8080."
+            ? "Cannot reach the API server. Make sure the backend is running on port 8000."
             : `Server returned an unreadable response (HTTP ${res.status}).`,
         );
       }

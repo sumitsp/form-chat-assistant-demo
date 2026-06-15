@@ -68,35 +68,35 @@ Run from **repo root** with venv active (`source venv/bin/activate`).
 
 | Command | Service | Port |
 |---|---|---|
-| `npm run dev:api` | Main API (`backend.api:app`) | **8080** |
-| `npm run dev:pricing` | LoanPASS pricing (`backend.pricing_app:app`) | **8090** |
+| `npm run dev:api` | Main API (`backend.api:app`) | **8000** |
+| `npm run dev:pricing` | LoanPASS pricing (`backend.pricing_app:app`) | **8001** |
 | `npm run dev` | Vite UI | **5173** |
 
 **Equivalent uvicorn commands** (same as the npm scripts above):
 
 ```bash
 # Main API — eligibility, chat intake, RAG, PDF, form history
-python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8080
+python -m uvicorn backend.api:app --reload --host 0.0.0.0 --port 8000
 
 # LoanPASS pricing (optional; only if LOANPASS_* is set)
-python -m uvicorn backend.pricing_app:app --reload --host 0.0.0.0 --port 8090
+python -m uvicorn backend.pricing_app:app --reload --host 0.0.0.0 --port 8001
 ```
 
 Without auto-reload (closer to prod / Docker):
 
 ```bash
-python -m uvicorn backend.api:app --host 0.0.0.0 --port 8080
-python -m uvicorn backend.pricing_app:app --host 0.0.0.0 --port 8090
+python -m uvicorn backend.api:app --host 0.0.0.0 --port 8000
+python -m uvicorn backend.pricing_app:app --host 0.0.0.0 --port 8001
 ```
 
 Bind to localhost only if you don't need LAN access:
 
 ```bash
-python -m uvicorn backend.api:app --reload --host 127.0.0.1 --port 8080
-python -m uvicorn backend.pricing_app:app --reload --host 127.0.0.1 --port 8090
+python -m uvicorn backend.api:app --reload --host 127.0.0.1 --port 8000
+python -m uvicorn backend.pricing_app:app --reload --host 127.0.0.1 --port 8001
 ```
 
-Open **http://localhost:5173**. Vite proxies `/api/*` → 8080 and `/api/loanpass/*` → 8090.
+Open **http://localhost:5173**. Vite proxies `/api/*` → 8000 and `/api/loanpass/*` → 8001.
 
 On macOS with an external SSD, prefer **`npm run dev:macos`** for the frontend — removes `._*` AppleDouble sidecars before starting (they break Python imports on exFAT). Run **`npm run clean:macos`** before uvicorn if you hit import errors on the API. The API also strips `._*` from the active venv's `site-packages` at startup.
 
@@ -112,8 +112,8 @@ python -m backend.tools.clean_logs --all   # Delete all trace/log dumps
 
 Health checks:
 
-- Main API: `GET http://localhost:8080/api/health`
-- Pricing: `GET http://localhost:8090/api/loanpass/health`
+- Main API: `GET http://localhost:8000/api/health`
+- Pricing: `GET http://localhost:8001/api/loanpass/health`
 
 ## Docker (one container)
 
@@ -121,7 +121,7 @@ Supervisord runs **api**, **pricing**, **frontend**, and a **pricing watchdog**.
 
 ```bash
 docker build -t newpoint-assistant .
-docker run --rm -p 5173:5173 -p 8080:8080 -p 8090:8090 --env-file .env newpoint-assistant
+docker run --rm -p 5173:5173 -p 8000:8000 -p 8001:8001 --env-file .env newpoint-assistant
 
 docker exec <container> supervisorctl status
 docker exec <container> supervisorctl restart pricing   # bounce pricing only
