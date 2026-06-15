@@ -1,0 +1,238 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* Extra-small breakpoint for very narrow phones */
+@custom-variant xs (@media (width >= 480px));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-brand: var(--brand);
+  --color-brand-foreground: var(--brand-foreground);
+  --color-brand-glow: var(--brand-glow);
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --font-display: var(--font-display);
+  --font-sans: var(--font-sans);
+}
+
+:root {
+  --radius: 0.75rem;
+
+  /* New Point inspired: deep navy + warm gold accent */
+  --background: oklch(0.985 0.005 240);
+  --foreground: oklch(0.18 0.04 250);
+
+  --surface: oklch(0.97 0.008 240);
+  --surface-elevated: oklch(1 0 0);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.18 0.04 250);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.18 0.04 250);
+
+  --primary: oklch(0.24 0.06 255);
+  --primary-foreground: oklch(0.985 0.005 240);
+
+  --brand: oklch(0.24 0.06 255);
+  --brand-foreground: oklch(0.985 0.005 240);
+  --brand-glow: oklch(0.55 0.13 260);
+
+  --secondary: oklch(0.95 0.01 245);
+  --secondary-foreground: oklch(0.24 0.06 255);
+
+  --muted: oklch(0.95 0.01 245);
+  --muted-foreground: oklch(0.5 0.02 250);
+
+  --accent: oklch(0.78 0.14 75);
+  --accent-foreground: oklch(0.2 0.04 60);
+
+  --destructive: oklch(0.6 0.22 25);
+  --destructive-foreground: oklch(0.985 0.005 240);
+
+  --border: oklch(0.9 0.01 245);
+  --input: oklch(0.92 0.01 245);
+  --ring: oklch(0.55 0.13 260);
+
+  --gradient-brand: linear-gradient(135deg, var(--brand) 0%, var(--brand-glow) 100%);
+  --gradient-subtle: linear-gradient(180deg, var(--surface) 0%, var(--background) 100%);
+  --shadow-soft: 0 1px 2px oklch(0.2 0.04 250 / 0.04), 0 4px 12px oklch(0.2 0.04 250 / 0.06);
+  --shadow-elegant: 0 10px 40px -10px oklch(0.24 0.06 255 / 0.25);
+  --shadow-glow: 0 0 30px oklch(0.55 0.13 260 / 0.25);
+
+  /* One font family across the whole platform: headings and body share the same
+     sans stack so nothing renders in a different (serif) face. `--font-display`
+     is kept as an alias so existing `font-display` / h1–h3 usages stay valid. */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-sans);
+}
+
+.dark {
+  --background: oklch(0.16 0.03 255);
+  --foreground: oklch(0.97 0.005 240);
+  --surface: oklch(0.2 0.035 255);
+  --surface-elevated: oklch(0.23 0.04 255);
+  --card: oklch(0.2 0.035 255);
+  --card-foreground: oklch(0.97 0.005 240);
+  --popover: oklch(0.2 0.035 255);
+  --popover-foreground: oklch(0.97 0.005 240);
+  --primary: oklch(0.97 0.005 240);
+  --primary-foreground: oklch(0.18 0.04 250);
+  --brand: oklch(0.55 0.13 260);
+  --brand-foreground: oklch(0.985 0.005 240);
+  --brand-glow: oklch(0.7 0.15 265);
+  --secondary: oklch(0.27 0.04 255);
+  --secondary-foreground: oklch(0.97 0.005 240);
+  --muted: oklch(0.27 0.04 255);
+  --muted-foreground: oklch(0.7 0.02 250);
+  --accent: oklch(0.78 0.14 75);
+  --accent-foreground: oklch(0.2 0.04 60);
+  --destructive: oklch(0.65 0.2 25);
+  --destructive-foreground: oklch(0.97 0.005 240);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.55 0.13 260);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    overflow-x: clip;
+    max-width: 100%;
+  }
+  body {
+    font-family: var(--font-sans);
+    margin: 0;
+    height: 100%;
+    background: var(--gradient-subtle);
+    color: var(--color-foreground);
+    min-height: 100%;
+    overflow-x: clip;
+    max-width: 100%;
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+  }
+}
+
+@layer components {
+  /* Safe-area padding for iPhone notch / home indicator */
+  .pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .pb-safe {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+  .pb-safe-sm {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  .app-scroll {
+    scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.65 0.05 255 / 0.35) transparent;
+    /* iOS: enable momentum scrolling and ensure this div is the scroll container */
+    -webkit-overflow-scrolling: touch;
+    /* Prevent iOS from using window scroll when this container is the target */
+    overscroll-behavior: contain;
+  }
+
+  .app-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+
+  .app-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .app-scroll::-webkit-scrollbar-thumb {
+    background: oklch(0.6 0.06 255 / 0.35);
+    border-radius: 9999px;
+  }
+
+  .app-scroll::-webkit-scrollbar-thumb:hover {
+    background: oklch(0.5 0.08 255 / 0.6);
+  }
+
+  /* iOS Safari: inputs below 16px trigger zoom-on-focus — mobile only */
+  @media (max-width: 639px) {
+    .np-wizard-app
+      input:not([type="checkbox"]):not([type="radio"]):not([type="button"]):not([type="submit"]),
+    .np-wizard-app textarea,
+    .np-wizard-app select,
+    .np-wizard-app [cmdk-input] {
+      font-size: 16px !important;
+    }
+  }
+
+  /* Per-field blur when any Radix dropdown is open */
+  .ff,
+  .ff-hint {
+    transition:
+      filter 0.15s ease,
+      opacity 0.15s ease;
+  }
+  body:has([data-radix-popper-content-wrapper]) .ff,
+  body:has([data-radix-popper-content-wrapper]) .ff-hint {
+    filter: blur(1.5px);
+    opacity: 0.6;
+    pointer-events: none;
+  }
+  /* Keep the field (and subscript hint) that owns the open dropdown sharp */
+  body:has([data-radix-popper-content-wrapper]) .ff:has([data-state="open"]),
+  body:has([data-radix-popper-content-wrapper]) .ff-group:has([data-state="open"]) .ff,
+  body:has([data-radix-popper-content-wrapper]) .ff-group:has([data-state="open"]) .ff-hint {
+    filter: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@keyframes voice-bar {
+  0%,
+  100% {
+    height: 4px;
+  }
+  50% {
+    height: 14px;
+  }
+}
+
+.voice-wave-bar {
+  height: 4px;
+}
+
+.voice-wave-bar:not(.h-1) {
+  animation: voice-bar 0.85s ease-in-out infinite;
+}
