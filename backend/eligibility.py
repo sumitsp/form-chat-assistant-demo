@@ -2938,36 +2938,14 @@ def _exclusions_from_blocked(
 # ---------------------------------------------------------------------------
 # Pure-LLM geographic restriction layer (single source of truth for form + chat).
 #
-# Two steps, no hardcoded rule parsing:
-#   Step 1 (deterministic) — Acme's overall licensing footprint. A state is
-#     eligible iff it appears in map_geographic_restrictions with
-#     restriction_type='eligible_state' AND restriction_detail='Eligible lending
-#     state'. A scenario in any other state is a hard no for every program.
-#   Step 2 (LLM, gpt-4o-mini) — for licensed states, hand the model the scenario
-#     context plus every non-eligible_state restriction row for that state and let
-#     it decide, per program, whether a row blocks or is just a note. We do NOT
-#     re-judge its reading with keyword checks; only generic guards apply
-#     (confidence threshold + structural rule scope).
+# No hardcoded rule parsing and NO state-licensing allowlist gate: the old
+# "overall licensing footprint" hard block (eligible_state rows) is no longer
+# enforced. The model is handed the scenario context plus every non-eligible_state
+# restriction row for that state and decides, per program, whether a row blocks or
+# is just a note. We do NOT re-judge its reading with keyword checks; only generic
+# guards apply (confidence threshold + structural rule scope). The 'eligible_state'
+# rows remain in map_geographic_restrictions but are ignored.
 # ---------------------------------------------------------------------------
-
-
-def _eligible_state_set(conn: Any) -> set[str]:
-    """Overall set of states Acme is licensed in (Step 1 allowlist)."""
-    try:
-        rows = conn.execute(
-            text(
-                "SELECT DISTINCT state FROM map_geographic_restrictions "
-                "WHERE restriction_type = 'eligible_state' "
-                "AND restriction_detail = 'Eligible lending state'"
-            )
-        ).fetchall()
-    except Exception:
-        return set()
-    return {
-        (r._mapping.get("state") or "").strip().upper()
-        for r in rows
-        if (r._mapping.get("state") or "").strip()
-    }
 
 
 def _geo_scenario_context(form: dict[str, Any], state: str) -> dict[str, Any]:
@@ -3122,15 +3100,12 @@ def _layer5_geo(
             c.setdefault("special_overlay", None)
         return candidates, geo_blocked, overlay_notes
 
-    # ── Step 1 — overall state allowlist (deterministic) ──────────────────
-    eligible = _eligible_state_set(conn)
-    if eligible and state not in eligible:
-        reason = f"Acme is not licensed to lend in {state}."
-        for c in candidates:
-            geo_blocked[int(c["program_id"])] = reason
-        return [], geo_blocked, overlay_notes
+    # State-licensing allowlist (the old "Acme is only licensed in these states"
+    # hard block) is intentionally NOT enforced. Eligibility relies solely on the
+    # per-program geographic overlays below. The 'eligible_state' rows remain in
+    # map_geographic_restrictions but are no longer used as a gate.
 
-    # ── Step 2 — LLM adjudication of restriction_detail rows ──────────────
+    # ── LLM adjudication of restriction_detail rows (geographic overlays) ──
     ids = [int(c["program_id"]) for c in candidates]
     try:
         rows = conn.execute(
@@ -5870,10 +5845,11 @@ def evaluate_geo(data: dict[str, Any]) -> dict[str, Any]:
 
     Deterministic only. The detailed, per-program geo filtering is the LLM layer
     in ``_layer5_geo`` (the single source of truth for both form and chat). Here
-    we only:
-      1. enforce the Acme state-licensing allowlist (Step 1) as a hard block, and
-      2. report whether the state carries any location restrictions, so the UI
-         never runs a second, parallel rules engine.
+    we only report whether the state carries any location restrictions, so the UI
+    never runs a second, parallel rules engine.
+
+    The state-licensing allowlist hard block is intentionally NOT enforced —
+    eligibility relies solely on the per-program geographic overlays.
 
     Returns: complete, warnings[{message,severity}], hard_block|None, has_restrictions.
     """
@@ -5883,34 +5859,21 @@ def evaluate_geo(data: dict[str, Any]) -> dict[str, Any]:
     if not state:
         return {"complete": False, "warnings": [], "hard_block": None, "has_restrictions": False}
 
-    eligible: set[str] = set()
     has_rows = False
     try:
         eng = _get_db_engine()
         with eng.connect() as conn:
-            eligible = _eligible_state_set(conn)
-            if (not eligible) or state in eligible:
-                has_rows = bool(
-                    conn.execute(
-                        text(
-                            "SELECT 1 FROM map_geographic_restrictions "
-                            "WHERE state = :state AND restriction_type <> 'eligible_state' LIMIT 1"
-                        ),
-                        {"state": state},
-                    ).first()
-                )
+            has_rows = bool(
+                conn.execute(
+                    text(
+                        "SELECT 1 FROM map_geographic_restrictions "
+                        "WHERE state = :state AND restriction_type <> 'eligible_state' LIMIT 1"
+                    ),
+                    {"state": state},
+                ).first()
+            )
     except Exception:
-        eligible, has_rows = set(), False
-
-    # Step 1 — Acme licensing footprint (same allowlist the engine uses).
-    if eligible and state not in eligible:
-        msg = f"Acme is not licensed to lend in {state}."
-        return {
-            "complete": complete,
-            "warnings": [{"message": msg, "severity": "error"}],
-            "hard_block": msg,
-            "has_restrictions": True,
-        }
+        has_rows = False
 
     if not complete and state_needs_geo_followup(state):
         return {"complete": False, "warnings": [], "hard_block": None, "has_restrictions": False}
