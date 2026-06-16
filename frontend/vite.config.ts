@@ -13,7 +13,7 @@ export default defineConfig({
   plugins: [tanstackStart(), react(), tsconfigPaths(), tailwindcss()],
   server: {
     host: true,
-    allowedHosts: ["newpointassist.algodel.com"],
+    allowedHosts: ["acmemortgageassist.algodel.com"],
     proxy: {
       "/api": {
         target: "http://127.0.0.1:8000",
