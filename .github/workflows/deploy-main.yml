@@ -57,6 +57,20 @@ jobs:
             git -C "${REPO_DIR}" fetch origin main
             git -C "${REPO_DIR}" reset --hard origin/main
 
+            # Ensure runtime env exists for docker-compose. Prefer DEPLOY_APP_ENV secret.
+            if [ ! -f "${REPO_DIR}/.env" ]; then
+              if [ -n "${{ secrets.DEPLOY_APP_ENV }}" ]; then
+                echo "==> Writing ${REPO_DIR}/.env from DEPLOY_APP_ENV secret"
+                cat > "${REPO_DIR}/.env" <<'EOF'
+${{ secrets.DEPLOY_APP_ENV }}
+EOF
+              else
+                echo "Missing ${REPO_DIR}/.env and DEPLOY_APP_ENV secret is not set."
+                echo "Add DEPLOY_APP_ENV in GitHub Actions secrets or create ${REPO_DIR}/.env on the server."
+                exit 1
+              fi
+            fi
+
             echo "==> Recreate ${SERVICE} container (stop, rm, prune, compose up --build)"
             cd "${COMPOSE_DIR}"
             docker stop "${SERVICE}" 2>/dev/null || true
