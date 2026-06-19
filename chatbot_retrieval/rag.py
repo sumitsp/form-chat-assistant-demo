@@ -635,7 +635,7 @@ def _rerank_hits(query: str, hits: list[Any]) -> list[Any]:
     rescored.sort(key=lambda x: x[0], reverse=True)
     return [row for _, row in rescored]
 
-
+##test
 def retrieve(
     client: QdrantClient,
     query: str,
