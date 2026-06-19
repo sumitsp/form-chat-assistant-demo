@@ -61,9 +61,7 @@ jobs:
             if [ ! -f "${REPO_DIR}/.env" ]; then
               if [ -n "${{ secrets.DEPLOY_APP_ENV }}" ]; then
                 echo "==> Writing ${REPO_DIR}/.env from DEPLOY_APP_ENV secret"
-                cat > "${REPO_DIR}/.env" <<'EOF'
-${{ secrets.DEPLOY_APP_ENV }}
-EOF
+                printf '%s' "${{ secrets.DEPLOY_APP_ENV }}" > "${REPO_DIR}/.env"
               else
                 echo "Missing ${REPO_DIR}/.env and DEPLOY_APP_ENV secret is not set."
                 echo "Add DEPLOY_APP_ENV in GitHub Actions secrets or create ${REPO_DIR}/.env on the server."
