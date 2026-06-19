@@ -1,0 +1,83 @@
+# Auto-deploy to production when main is pushed.
+# Requires GitHub repo secrets — see docs/DEPLOY.md.
+
+name: Deploy main
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy form-chat-assistant
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Deploy over SSH (git pull + docker compose)
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
+          command_timeout: 15m
+          script: |
+            set -euo pipefail
+
+            # Parent "apps/" folder: docker-compose.yml + form-chat-assistant/ as siblings.
+            COMPOSE_DIR="${{ secrets.DEPLOY_COMPOSE_DIR }}"
+            SERVICE="form-chat-assistant"
+            REPO_DIR="${COMPOSE_DIR}/form-chat-assistant"
+            REPO_SLUG="abhinavdg-ever/form-chat-assistant"
+
+            if [ ! -f "${COMPOSE_DIR}/docker-compose.yml" ]; then
+              echo "Missing ${COMPOSE_DIR}/docker-compose.yml"
+              exit 1
+            fi
+            if [ ! -d "${REPO_DIR}/.git" ]; then
+              echo "Missing git clone at ${REPO_DIR}"
+              exit 1
+            fi
+
+            echo "==> Pulling origin/main in ${REPO_DIR}"
+            GIT_SSH_KEY="${HOME}/.ssh/everadg"
+            if [ ! -f "${GIT_SSH_KEY}" ]; then
+              echo "Missing GitHub SSH key at ${GIT_SSH_KEY} — see docs/DEPLOY.md"
+              exit 1
+            fi
+            chmod 600 "${GIT_SSH_KEY}" 2>/dev/null || true
+            eval "$(ssh-agent -s)"
+            ssh-add "${GIT_SSH_KEY}"
+            export GIT_SSH_COMMAND="ssh -i ${GIT_SSH_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+            git -C "${REPO_DIR}" remote set-url origin "git@github.com:${REPO_SLUG}.git"
+            git -C "${REPO_DIR}" fetch origin main
+            git -C "${REPO_DIR}" reset --hard origin/main
+
+            echo "==> Recreate ${SERVICE} container (stop, rm, prune, compose up --build)"
+            cd "${COMPOSE_DIR}"
+            docker stop "${SERVICE}" 2>/dev/null || true
+            docker rm "${SERVICE}" 2>/dev/null || true
+            docker system prune --volumes -f
+            docker compose up -d --build "${SERVICE}"
+
+            echo "==> Health check (backend :8082 -> container :8080)"
+            ok=0
+            for i in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8082/api/health >/dev/null; then
+                ok=1
+                break
+              fi
+              sleep 2
+            done
+
+            if [ "${ok}" -ne 1 ]; then
+              echo "Health check failed — recent logs:"
+              docker compose logs --tail=80 "${SERVICE}" || true
+              exit 1
+            fi
+
+            echo "Deploy succeeded."

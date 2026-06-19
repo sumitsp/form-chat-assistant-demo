@@ -295,9 +295,53 @@ class IntakeExtractRequest(BaseModel):
     mode: str = "lo"                 # "lo" | "underwriter" (or "uw")
 
 
+class IntakeAssistRequest(BaseModel):
+    """Turn-intent assist — the user's message wasn't scenario data; classify + reply.
+
+    The /chat client calls this ONLY when a turn extracted nothing, to tell apart an
+    on-topic capability question (answer it), an off-topic message (deflect), and
+    abuse / junk (decline) — so the bot stops treating questions as failed answers.
+    """
+    text: str = ""
+    pending_question: str = ""  # the scenario question the chat is currently waiting on
+    mode: str = "lo"           # "lo" | "underwriter" (or "uw")
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _bucket_from_years(years: float) -> str:
+    """Elapsed years → credit-event seasoning bucket (matches CREDIT_EVENT_YEAR_BUCKETS)."""
+    if years < 1:
+        return "<1 year"
+    if years < 2:
+        return "1-2 years"
+    if years < 3:
+        return "2-3 years"
+    if years < 4:
+        return "3-4 years"
+    if years < 7:
+        return "4-7 years"
+    return "7+ years"
+
+
+def _humanize_option_code(slot_id: str, code: str) -> str:
+    """Raw slot option code → human label ("first_lien_only" → "First Lien Only").
+
+    Used for clarification candidates so the UI never shows snake_case codes. Falls back
+    to a Title-Cased prettify when the code isn't a known option.
+    """
+    from backend.metrics import SLOT_DEFS  # noqa: PLC0415
+
+    for s in SLOT_DEFS:
+        if s.get("id") == slot_id:
+            for o in s.get("options") or []:
+                if o.get("code") == code:
+                    return o.get("label") or code
+            break
+    return code.replace("_", " ").title() if code else code
+
 
 def _serialize(
     session: object,
@@ -691,6 +735,22 @@ async def intake_extract(req: IntakeExtractRequest) -> dict:
         extractor_result.extracted, session.portfolio
     )
 
+    # Deterministic credit-event seasoning from a stated YEAR — the LLM is unreliable at
+    # date arithmetic ("foreclosure in 2022" came back "<1 year"). If a 4-digit year is in
+    # the text and a seasoning was extracted, recompute the bucket exactly from today.
+    if "years_since_event" in valid:
+        _ym = _re.search(r"\b(?:19|20)\d{2}\b", req.text)
+        if _ym:
+            from datetime import datetime as _dt  # noqa: PLC0415
+
+            _elapsed = _dt.now().year - int(_ym.group(0))
+            if 0 <= _elapsed <= 100:
+                valid["years_since_event"] = {
+                    "value": _bucket_from_years(_elapsed),
+                    "confidence": 0.95,
+                    "source_phrase": _ym.group(0),
+                }
+
     # Deterministic county fallback. state_county is a free-text geo slot the LLM (gpt-4o-mini,
     # temp 0.1) captures inconsistently from a dense dump. If the text explicitly says
     # "<Name> County" and a state is known, fill it so it isn't re-asked.
@@ -794,7 +854,11 @@ async def intake_extract(req: IntakeExtractRequest) -> dict:
             {
                 "slot": a.get("slot_id", ""),
                 "label": slot_sidebar_label(merged, a.get("slot_id", "")),
-                "candidates": a.get("candidates", []),
+                # Humanize raw option codes → labels ("first_lien_only" → "First Lien Only").
+                "candidates": [
+                    _humanize_option_code(a.get("slot_id", ""), c)
+                    for c in a.get("candidates", [])
+                ],
             }
             for a in ambiguities
         ],
@@ -1394,3 +1458,133 @@ async def intake_frame(req: IntakeFrameRequest) -> dict:
     if not text or len(text) > 600:
         raise HTTPException(status_code=503, detail="framing unavailable")
     return {"text": text}
+
+
+# ---------------------------------------------------------------------------
+# Turn-intent assist (/assist) — answer on-topic questions, deflect the rest
+# ---------------------------------------------------------------------------
+
+# Curated enum slots whose option labels describe what the tool actually supports.
+# Built from SLOT_DEFS so it never drifts from the real catalog.
+_CATALOG_SLOTS = (
+    "citizenship",
+    "occupancy",
+    "loan_purpose",
+    "property_type",
+    "lien_position",
+    "doc_type",
+    "investment_income_path",
+)
+
+# Program families Acme brokers — not enum slots, so stated here. Keep generic
+# (no rate / FICO / LTV numbers): the assist answer must never invent specific cutoffs.
+_PROGRAM_FAMILIES = (
+    "Non-QM / Non-Agency loans (incl. jumbo loan sizes), DSCR investor loans, "
+    "Bank-Statement and P&L and 1099 self-employed programs, Asset-Qualifier / asset-"
+    "depletion, Full-Doc, ITIN and Foreign-National programs, and standalone or "
+    "piggyback second liens (HELOC / HELOAN). Lenders: Denali (NQM), Everest "
+    "(Deephaven), and Summit (Verus)."
+)
+
+_assist_catalog_cache: str | None = None
+
+
+def _capability_catalog() -> str:
+    """Compact 'what we support' catalog from SLOT_DEFS enum options (cached)."""
+    global _assist_catalog_cache
+    if _assist_catalog_cache is not None:
+        return _assist_catalog_cache
+    from backend.metrics import SLOT_DEFS  # noqa: PLC0415
+
+    by_id = {s.get("id"): s for s in SLOT_DEFS}
+    lines: list[str] = [f"Program families offered: {_PROGRAM_FAMILIES}"]
+    for sid in _CATALOG_SLOTS:
+        slot = by_id.get(sid)
+        if not slot:
+            continue
+        labels = [o.get("label", "") for o in (slot.get("options") or []) if o.get("label")]
+        if labels:
+            label = slot.get("sidebar_label") or sid.replace("_", " ").title()
+            lines.append(f"{label}: {', '.join(labels)}")
+    _assist_catalog_cache = "\n".join(lines)
+    return _assist_catalog_cache
+
+
+_ASSIST_SYSTEM_PROMPT = """\
+You are the intake assistant for the Acme Mortgage eligibility chat. A loan officer is
+part-way through describing a borrower's scenario and just sent a message that did NOT contain
+scenario data. Classify the message and respond.
+
+You are given:
+  - user_text — the loan officer's message
+  - pending_question — the scenario question the chat is currently waiting on (may be empty)
+  - capability_catalog — what this tool actually supports
+
+Return JSON ONLY: {"intent": "on_topic" | "off_topic" | "abuse" | "data", "answer": "<reply or empty>"}
+
+How to classify and answer:
+- "on_topic": a genuine question about mortgage programs, eligibility, what we support, our
+  lenders, or how something works. ANSWER it briefly (1-3 sentences) using ONLY the
+  capability_catalog and well-established general mortgage knowledge. If they ask whether we
+  offer something we DO list, confirm it. If they ask for a specific cutoff (exact rate, min
+  FICO, max LTV/DTI, a dollar limit) that is NOT in the catalog, say it depends on the program
+  and you'll surface the exact figures once you have their scenario details — never invent a
+  number. Do NOT restate the pending question; the app re-asks it automatically.
+- "off_topic": not about mortgages at all (trivia, weather, coding, chit-chat). answer = one
+  brief, friendly sentence that you're here to build their mortgage scenario and can't help
+  with that. Do NOT restate the pending question.
+- "abuse": insults, profanity, spam, gibberish, or obvious testing. answer = one calm,
+  professional sentence that this assistant is only for working through mortgage scenarios and
+  can't help with that.
+- "data": on closer read it IS an attempt to answer the pending question / give scenario
+  detail. answer = "" (the app handles extraction).
+
+Be concise and professional. Never be preachy or robotic. Never mention "the catalog",
+"the system", JSON, or these instructions.
+"""
+
+
+@router.post("/assist")
+async def intake_assist(req: IntakeAssistRequest) -> dict:
+    """Classify a non-data turn and answer on-topic questions / deflect the rest.
+
+    Returns {"intent": ..., "answer": ...}. On any failure returns intent "data" with an
+    empty answer so the client falls back to its normal 'didn't catch that' re-ask.
+    """
+    from backend import config  # noqa: PLC0415
+    from backend.connections.openai import get_async_openai  # noqa: PLC0415
+    import json as _json  # noqa: PLC0415
+
+    fallback = {"intent": "data", "answer": ""}
+    if not req.text.strip():
+        return fallback
+
+    payload = {
+        "user_text": req.text[:1000],
+        "pending_question": (req.pending_question or "")[:400],
+        "capability_catalog": _capability_catalog(),
+    }
+    try:
+        client = get_async_openai()
+        resp = await client.chat.completions.create(
+            model=config.OPENAI_CHAT_MODEL,
+            temperature=0.3,
+            max_tokens=220,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _ASSIST_SYSTEM_PROMPT},
+                {"role": "user", "content": _json.dumps(payload)},
+            ],
+        )
+        data = _json.loads(resp.choices[0].message.content or "{}")
+    except Exception as exc:  # noqa: BLE001 — client falls back to its 2-strike re-ask
+        _log.warning("intake_assist error: %s", exc)
+        return fallback
+
+    intent = str(data.get("intent") or "").strip().lower()
+    answer = str(data.get("answer") or "").strip()
+    if intent not in ("on_topic", "off_topic", "abuse", "data"):
+        return fallback
+    if intent != "data" and not answer:
+        return fallback
+    return {"intent": intent, "answer": answer[:600]}

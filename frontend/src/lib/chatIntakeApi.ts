@@ -132,6 +132,50 @@ export function intakeExtract(
   });
 }
 
+/** Turn-intent classification for a /chat turn that extracted no scenario data. */
+export type IntakeAssistIntent = "on_topic" | "off_topic" | "abuse" | "data";
+
+export interface IntakeAssistResponse {
+  intent: IntakeAssistIntent;
+  /** Reply to show before re-asking the pending question (empty when intent is "data"). */
+  answer: string;
+}
+
+/**
+ * Classify + answer a non-data turn (on-topic question / off-topic / abuse). Called ONLY
+ * when a turn extracted nothing, so the bot can answer questions instead of treating them
+ * as failed answers. Hard 6s timeout; on any failure resolves to intent "data" with an
+ * empty answer so the caller falls back to its normal "didn't catch that" re-ask.
+ */
+export async function intakeAssist(
+  apiBase: string,
+  body: { text: string; pending_question?: string; mode?: "lo" | "underwriter" },
+): Promise<IntakeAssistResponse> {
+  const fallback: IntakeAssistResponse = { intent: "data", answer: "" };
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(`${baseUrl(apiBase)}/api/intake/assist`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: body.text,
+        pending_question: body.pending_question ?? "",
+        mode: body.mode ?? "lo",
+      }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return fallback;
+    const data = (await res.json()) as Partial<IntakeAssistResponse>;
+    const intent = data.intent ?? "data";
+    return { intent, answer: (data.answer ?? "").trim() };
+  } catch {
+    return fallback;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 /**
  * Stateless framing call (Phase-2 of the /chat overhaul) — asks the backend to phrase
  * ONE combo/summary ask. Hard 3.5s timeout; callers ALWAYS fall back to their

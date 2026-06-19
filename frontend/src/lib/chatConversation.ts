@@ -895,6 +895,16 @@ function buildOptions(
   rng: () => number,
 ): DispatcherDecision {
   const p = promptFor(q, state.form);
+  // The DTI capacity notice is a heads-up that leads into extra details — not a casual
+  // yes/no. Render it as a plain notice: no breezy opener, no "(Yes / No)" suffix.
+  if (q.special === "capacity_dti_notice" || q.special === "capacity_dti_bundle") {
+    return {
+      format: "options_question",
+      fields: [q],
+      text: p.question,
+      pendingChatField: q.id,
+    };
+  }
   const opener = pickVariant("options", OPTIONS_OPENERS, state, rng);
   const hint = q.hint?.trim()
     ? ` (${q.hint.trim()})`

@@ -883,7 +883,7 @@ def scenario_pdf_download(body: ScenarioPdfRequest):
         pdf_bytes = generate_scenario_pdf_bytes(pdf_body)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"PDF generation failed: {e}") from e
-    filename = scenario_pdf_filename()
+    filename = scenario_pdf_filename(pdf_body)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

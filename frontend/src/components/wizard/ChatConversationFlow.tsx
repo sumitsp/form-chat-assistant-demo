@@ -388,6 +388,8 @@ export function ChatConversationFlow({
     [scrollToBottom],
   );
 
+  // Bridges the forward reference: deps is built before handleProfileReset is defined.
+  const handleProfileResetRef = useRef<(() => void) | null>(null);
   const deps: UseChatConversationDeps = {
     apiBase,
     mode,
@@ -398,6 +400,7 @@ export function ChatConversationFlow({
     appendUserChat,
     appendAssistantChat,
     setLoading,
+    onResetScenario: () => handleProfileResetRef.current?.(),
   };
   const chat = useChatConversation(deps);
 
@@ -493,6 +496,8 @@ export function ChatConversationFlow({
     setStreamThroughIndex(-1);
     onResetScenario?.();
   }, [chat, preludeStreaming, eligibilityScanning, onClearRestart, onResetScenario]);
+  // Keep the ref pointing at the latest reset handler (used by the chat "reset" command).
+  handleProfileResetRef.current = handleProfileReset;
 
   /** Only reveal the next thread message after the prior one finishes streaming. */
   const [streamThroughIndex, setStreamThroughIndex] = useState(-1);

@@ -38,7 +38,7 @@ Return JSON ONLY in this exact shape:
 RULES:
 1. Use the EXACT codes from the schema options (e.g. "us_citizen" not "US Citizen", "purchase" not "Purchase").
 2. For enum slots: if a value cleanly maps → put it in extracted{}. If the user's phrase SOUNDS like a valid option but doesn't exactly match any code, label, or alias → put it in ambiguities[] with the closest candidate codes. If the value is completely unrecognisable for that slot → scenario_notes.
-3. For currency/number: return a raw number (no $, commas, %). For LTV/DTI/DSCR, return the whole-number percent (e.g. 80).
+3. For currency/number: return a raw number (no $, commas, %). For LTV/DTI, return the whole-number percent (e.g. 80). DSCR is a DECIMAL RATIO, not a percent — return it as-is (e.g. "1.15", "0.95", "1.0"); NEVER convert it to a percent. ONLY extract dscr when the user explicitly states a coverage ratio ("DSCR 1.15", "1.2 DSCR", "ratio of 1.0", "rents cover 1.25x"); NEVER guess or infer a DSCR value.
 4. multi_enum slots must be arrays.
 5. Confidence: 0.95+ only when explicitly stated; 0.80-0.94 for paraphrased/hedged; <0.80 for inferred.
 6. last_target_slots: weight heavily — a one-word reply almost certainly answers that slot.
@@ -98,8 +98,13 @@ RULES:
     captured field is forbidden.
 19. CREDIT EVENTS — extract every detail present in one pass: category (BK/FC/SS/…) →
     credit_event_category; chapter + outcome ("Ch 7 discharged", "chapter 13 dismissed") →
-    credit_event_type; elapsed time ("7 years ago", "7+ yrs back", "in 2019") → years_since_event
-    bucket. "BK Ch7 - 7+ years ago" must yield all three, not just the category.
+    credit_event_type; elapsed time → years_since_event bucket. "BK Ch7 - 7+ years ago" must
+    yield all three, not just the category.
+    SEASONING from a stated YEAR or MM/YYYY: compute elapsed years as (year of "today" minus the
+    stated year) and pick the bucket — "today" is in the payload. Example: today 2026, "foreclosure
+    in 2022" → 2026-2022 = 4 years → "4-7 years" (NOT "<1 year"). "in 2019" with today 2026 → 7 →
+    "7+ years". Relative phrases map directly: "7 years ago"/"7+ yrs back" → "7+ years"; "last year"
+    → "<1 year". NEVER return "<1 year" for a year that is several years before "today".
 20. HELOC STRUCTURE — on a standalone-second HELOC (second_lien_product = "heloc"):
     • The credit limit / line amount IS loan_amount ("a $150k HELOC", "line of $150,000"
       → loan_amount = 150000).
@@ -107,6 +112,37 @@ RULES:
       "5 yr draw period" → "5").
     • The amount drawn at closing → heloc_initial_draw ("drawing $50k upfront",
       "initial draw of 50,000" → 50000). NEVER put a HELOC draw into cash_in_hand.
+21. CITIZENSHIP normalization — map the cue to the slot code even when buried in filler
+    or code-mixed / Hinglish phrasing, ESPECIALLY when last_target_slots includes citizenship:
+    • "US" / "U.S." / "USA" / "American" / "US citizen" / "citizen" → citizenship = "us_citizen"
+    • "green card" / "permanent resident" / "PR" / "LPR" → "perm_resident"
+    • "ITIN" → "itin"
+    • "visa" / "work visa" / "H-1B" / "non-permanent" / "non perm" → "non_perm_resident"
+    • "DACA" → "daca"
+    • "foreign national" / "non-resident alien" → "foreign_national"
+    Examples: "Citizenship toh US hi hai" (Hinglish for "citizenship is US") → us_citizen;
+    "borrower US ka hai" → us_citizen; "green card holder hai" → perm_resident.
+    Only treat a bare pronoun "us" as us_citizen when the slot is citizenship (target or
+    the word "citizenship" is present) — otherwise it is the ordinary word "us".
+22. DSCR IS NOT A DOCUMENTATION TYPE. "DSCR" is an income-qualification PATH, not a doc_type.
+    • NEVER map "DSCR" (or "doc type DSCR", "change documentation to DSCR", "DSCR loan") to
+      any doc_type value — not full_doc, NOT asset_utilization, not bank_statements, nothing.
+    • DSCR is valid ONLY when occupancy is investment_property. If occupancy IS investment,
+      a DSCR mention sets investment_income_path = "dscr". If occupancy is NOT investment
+      (primary_residence / second_home) or occupancy is unknown, DO NOT extract anything for
+      a DSCR mention — return it as neither doc_type nor income path (the app explains the
+      conflict separately). Do not substitute the "closest" doc type.
+23. CAPABILITY QUESTIONS ARE NOT SCENARIO DATA (this rule OVERRIDES all extraction below).
+    If the user is ASKING whether you offer / allow / support something — rather than stating
+    THEIR borrower's scenario — extract NOTHING (return empty "extracted", no scenario_notes).
+    Signals: the message is a question (ends with "?" or is phrased as one) AND uses inquiry
+    wording like "do you do / offer / have / allow / support", "can you / can I", "is there /
+    are there", "what about", "do you give", "what programs".
+    Even if it NAMES values (DACA, ITIN, jumbo, DSCR, a state, an LTV), DO NOT map them —
+    "Do you do jumbo loans for DACA?" extracts NOTHING (the user is not saying the borrower is
+    DACA; they're asking about availability). The app answers capability questions separately.
+    EXCEPTION: if the same message ALSO clearly states the borrower's own value
+    ("the borrower is DACA — do you do jumbo?"), extract that stated value only.
 """
 
 
@@ -142,11 +178,15 @@ async def extractor_llm(
 
     client = get_async_openai()
 
+    from datetime import datetime  # noqa: PLC0415
+
     params = parameters_for_llm(session.portfolio, bulk=(mode == "bulk"))
     payload = {
         "parameters_by_priority": params,
         "portfolio": {k: v for k, v in session.portfolio.items() if not k.endswith(("_status", "_source", "_confidence"))},
         "last_target_slots": session.last_target_slots if mode == "turn" else [],
+        # The model needs today's date to compute "years since" from a stated year/date.
+        "today": datetime.now().strftime("%Y-%m-%d"),
         "user_text": user_text,
     }
 

@@ -101,6 +101,15 @@ def _fmt_money(amount: int) -> str:
     return f"${amount:,}"
 
 
+def _slugify_filename_part(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^A-Za-z0-9]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    return text
+
+
 def _short_layer(layer: str) -> str:
     mapping = {
         "Layer 1": "Program gate",
@@ -255,7 +264,7 @@ class _PdfCanvas:
         )
         self.y = row_y + row_h
 
-    def _draw_footer(self) -> None:
+    def _draw_footer(self, page_num: int, total_pages: int) -> None:
         text = f"Acme Mortgage - Confidential  |  Page {self.page_num}"
         self.page.insert_text(
             (_MARGIN, _page_rect().height - 18),
@@ -264,9 +273,15 @@ class _PdfCanvas:
             fontname="helv",
             color=_MUTED,
         )
+        self.page.insert_text(
+            (_page_rect().width / 2 - 22, _page_rect().height - 6.5),
+            f"-- {page_num} of {total_pages} --",
+            fontsize=7.5,
+            fontname="helv",
+            color=_MUTED,
+        )
 
     def new_page(self) -> None:
-        self._draw_footer()
         self.page = self.doc.new_page(width=_page_rect().width, height=_page_rect().height)
         self.page_num += 1
         self.y = _MARGIN
@@ -405,8 +420,10 @@ class _PdfCanvas:
         return xs
 
     def programs_table(self, programs: list[ScenarioPdfProgramItem]) -> None:
-        w_detail = self.content_w * 0.72
-        w_loan = self.content_w - w_detail
+        w_program = self.content_w * 0.34
+        w_fico = self.content_w * 0.12
+        w_loan = self.content_w * 0.18
+        w_products = self.content_w - w_program - w_fico - w_loan
         self.page.insert_text(
             (_MARGIN, self.y + 10),
             f"{len(programs)} program{'s' if len(programs) != 1 else ''} matched",
@@ -415,45 +432,56 @@ class _PdfCanvas:
             color=_MUTED,
         )
         self.y += 16
-        self._table_header([("Program / Products", w_detail), ("Max Loan", w_loan)])
+        self._table_header(
+            [("Program", w_program), ("Min FICO", w_fico), ("Max Loan", w_loan), ("Products", w_products)]
+        )
         for idx, p in enumerate(programs):
             title = p.program_title
             if p.investor_name.strip():
                 title += f" ({p.investor_name.strip()})"
-            products = (p.products_display or "").strip()
-            detail = title
-            if products:
-                detail += f"\n{products.replace(', ', ' | ')}"
+            products = (p.products_display or "").strip().replace(", ", " | ")
             if p.special_overlay:
-                short = p.special_overlay[:100] + ("..." if len(p.special_overlay) > 100 else "")
-                detail += f"\nNote: {short}"
+                short = p.special_overlay[:120] + ("..." if len(p.special_overlay) > 120 else "")
+                products = f"{products}\nNote: {short}" if products else f"Note: {short}"
             loan = _fmt_money(p.max_loan) if p.max_loan else "-"
-            self._table_row([(detail, w_detail), (loan, w_loan)], alt=idx % 2 == 1, font_size=8)
+            fico = str(int(p.min_fico)) if p.min_fico is not None else "-"
+            self._table_row(
+                [(title, w_program), (fico, w_fico), (loan, w_loan), (products or "-", w_products)],
+                alt=idx % 2 == 1,
+                font_size=8,
+            )
 
     def rejected_table(self, rejected: list[ScenarioPdfRejectedItem]) -> None:
-        w_prog = self.content_w * 0.32
+        w_prog = self.content_w * 0.38
         w_reason = self.content_w - w_prog
         self.page.insert_text(
             (_MARGIN, self.y + 10),
-            f"{len(rejected)} program{'s' if len(rejected) != 1 else ''} rejected",
+            f"{len(rejected)} program{'s' if len(rejected) != 1 else ''} excluded",
             fontsize=8.5,
             fontname="helv",
             color=_MUTED,
         )
         self.y += 16
-        self._table_header([("Program", w_prog), ("Reason", w_reason)])
+        self.page.insert_text(
+            (_MARGIN, self.y + 9),
+            "Not a fit for this scenario",
+            fontsize=8.2,
+            fontname="helv",
+            color=_MUTED,
+        )
+        self.y += 14
+        self._table_header([("Program", w_prog), ("Why", w_reason)])
         for idx, item in enumerate(rejected):
-            layer = _short_layer(item.layer)
             reason = item.reason or "-"
-            if layer:
-                reason = f"{layer}: {reason}"
             title = item.program_title
-            if item.program_id:
-                title += f"  (#{item.program_id})"
             self._table_row([(title, w_prog), (reason, w_reason)], alt=idx % 2 == 1)
 
     def finish(self) -> bytes:
-        self._draw_footer()
+        total_pages = len(self.doc)
+        for idx, page in enumerate(self.doc, start=1):
+            self.page = page
+            self.page_num = idx
+            self._draw_footer(idx, total_pages)
         return self.doc.tobytes()
 
 
@@ -493,8 +521,25 @@ def generate_scenario_pdf_bytes(body: ScenarioPdfRequest) -> bytes:
     return _render_pdf(body, generated_date)
 
 
-def scenario_pdf_filename() -> str:
-    return f"Acme-Loan-Scenario-{datetime.now(_ET).strftime('%Y-%m-%d')}.pdf"
+def scenario_pdf_filename(body: ScenarioPdfRequest | None = None) -> str:
+    date_part = datetime.now(_ET).strftime("%Y-%m-%d")
+    if body is None:
+        return f"Acme-Loan-Scenario-{date_part}.pdf"
+
+    fields = body.form_fields or {}
+    purpose = _slugify_filename_part(str(fields.get("primaryLoanPurpose") or fields.get("loanPurpose") or ""))
+    property_type = _slugify_filename_part(str(fields.get("propertyType") or ""))
+    state = _slugify_filename_part(str(fields.get("state") or "").upper())
+
+    parts = ["Acme", "Loan", "Scenario"]
+    if purpose:
+        parts.append(purpose)
+    if property_type:
+        parts.append(property_type)
+    if state:
+        parts.append(state)
+    parts.append(date_part)
+    return "-".join(parts) + ".pdf"
 
 
 def build_profile_page_html(body: ScenarioPdfRequest, generated_date: str) -> str:

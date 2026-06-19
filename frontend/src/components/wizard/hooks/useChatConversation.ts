@@ -14,7 +14,7 @@
  * effects keep working, and the post-results edit → dirty → Resubmit loop is reused as-is.
  *
  * Inferred/ambiguous values are queued (`reinforceQueueRef`) and confirmed one at a time
- * before the next question. A question that fails to extract twice is skipped: fields
+ * before the next question. A question that fails to extract 3 times is skipped: fields
  * with a `safeDefault` get the default applied (editable from the sidebar); others are
  * deferred and re-asked once at the end inside a summary card (2-strike guard).
  */
@@ -46,7 +46,7 @@ import {
   themeOf,
   type DispatcherState,
 } from "@/lib/chatConversation";
-import { intakeExtract, intakeFrame } from "@/lib/chatIntakeApi";
+import { intakeAssist, intakeExtract, intakeFrame } from "@/lib/chatIntakeApi";
 import { CREDIT_EVENT_YEAR_BUCKETS } from "@/lib/creditEventTiming";
 import {
   BK_TYPE_OPTS,
@@ -55,15 +55,20 @@ import {
   CREDIT_EVENT_NONE,
   CREDIT_EVENT_SELECT_OPTS,
   creditEventLabel,
+  creditEventSidebarLabel,
+  FORM_CHAT_LOAN_TERM_NO_PREF,
   FORM_CHAT_PRODUCT_PREF_IDS,
   FORM_CHAT_QUESTIONS,
   chatAnswerFormPatch,
   formChatProductPrefOptions,
+  parseLoanTermChatReply,
   isFormChatProductPrefQuestion,
   isFormChatSkipMessage,
   isNoProductPreference,
   mandatoryComplete,
   isStructuredPendingQuestion,
+  nocbVisible,
+  residualTriggered,
   nextRequiredGeoField,
   optionsFor,
   portfolioSlotForFormField,
@@ -114,11 +119,214 @@ function braindumpPreamble(capturedCount: number): string {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+/**
+ * Opening-turn nudge when the very first message is off-topic / abuse / junk (no scenario
+ * captured yet). We do NOT jump into the first question — instead, one combined message
+ * that steers them to describe the scenario in their own words, and intake picks up from there.
+ */
+const SCENARIO_DESCRIBE_INVITE =
+  "To make this easy, just describe your scenario in a sentence or two — for example: " +
+  "“Purchase of a single-family home in Florida, $720K loan at 80% LTV, 720 FICO, full doc.” " +
+  "I’ll take it from there.";
+
 const AFFIRM_RE =
   /^(?:yes|yep|yeah|yup|y|correct|right|confirm(?:ed)?|ok(?:ay)?|looks good|that'?s right|sure|👍)\b/i;
 
 /** Replies that mean "nothing to change / keep going" on the summary + recap steps. */
 const CONTINUE_RE = /^(?:nothing|none|continue|keep going|all good|no changes?|looks good)\b/i;
+
+/** A removal/drop command (e.g. "remove Ch7-Disch and Foreclosure"). */
+const REMOVAL_VERB_RE = /\b(remove|delete|drop|get rid of|getting rid of|take out|exclude)\b/i;
+
+/** Looks like an edit COMMAND (vs a genuine free-text scenario note) at the recap. */
+const EDIT_COMMAND_RE =
+  /\b(change|update|set|switch|correct|edit|fix|modif|make it|increase|decrease|lower|raise|adjust|remove|delete|drop)\b/i;
+
+/** Credit-event vocabulary — used to detect a removal aimed at credit events that matched nothing. */
+const CREDIT_KEYWORDS_RE =
+  /\b(bankruptc|bk|foreclosure|short\s*sale|deed.?in.?lieu|charge.?off|notice of default|loan mod|modification|forbearance|deferral|ch\.?\s*7|ch\.?\s*13|chapter\s*(?:7|13)|credit event)\b/i;
+
+function normForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Tokens that identify a credit-event code in free text (label, sidebar label, keywords). */
+function creditEventMatchTokens(code: string): string[] {
+  const toks = [normForMatch(creditEventLabel(code)), normForMatch(creditEventSidebarLabel(code))];
+  if (code.startsWith("BK")) toks.push("bankruptcy", "bk");
+  const kw: Record<string, string[]> = {
+    FC: ["foreclosure"],
+    SS: ["short sale"],
+    DIL: ["deed in lieu", "dil"],
+    "Pre-FC": ["pre foreclosure"],
+    "Charge-Off": ["charge off", "chargeoff"],
+    NOD: ["notice of default"],
+    Mod: ["loan modification", "modification", "loan mod"],
+    Forbearance: ["forbearance"],
+    Deferral: ["deferral"],
+  };
+  if (kw[code]) toks.push(...kw[code]);
+  return [...new Set(toks.filter(Boolean))];
+}
+
+/** A bare "reset / start over" command — wipes the scenario and restarts intake. */
+const RESET_COMMAND_RE =
+  /^\s*(reset|start over|start again|restart|clear (?:everything|all|it))\b/i;
+
+/**
+ * Parse the high-DTI capacity bundle from prose. These fields (NOCB / combined DTI /
+ * household size / residual income) are NOT extractor slots, so chat must parse them
+ * directly or the bundle question loops forever.
+ */
+function parseDtiBundleReply(raw: string): Partial<WizardForm> {
+  const lc = raw.toLowerCase();
+  const out: Record<string, string> = {};
+  if (
+    /\bno\b[^.]*\b(co-?borrower|nocb|non-?occupant)\b/.test(lc) ||
+    /\b(co-?borrower|nocb|non-?occupant)\b[^.]*\bno\b/.test(lc) ||
+    /\bno\s+co-?borrower\b/.test(lc)
+  ) {
+    out.nonOccupantCoBorrower = "No";
+  } else if (
+    /\b(yes|have|has|there'?s|with)\b[^.]*\b(co-?borrower|nocb|non-?occupant)\b/.test(lc)
+  ) {
+    out.nonOccupantCoBorrower = "Yes";
+  }
+  const hh =
+    lc.match(/household\s*(?:size)?\s*(?:is|of|=|:|-)?\s*(\d+)/) ||
+    lc.match(/(\d+)\s*(?:people|persons|members|in\s+(?:the\s+)?household)/);
+  if (hh) out.householdSize = hh[1];
+  const ri = lc.match(/residual\s*(?:income)?\s*(?:is|of|=|:|-)?\s*\$?\s*([\d,]+)/);
+  if (ri) out.monthlyResidualIncome = ri[1].replace(/,/g, "");
+  const cd = lc.match(/combined\s*dti\s*(?:is|of|=|:|-)?\s*(\d+(?:\.\d+)?)\s*%?/);
+  if (cd) out.combinedDti = cd[1];
+  return out as Partial<WizardForm>;
+}
+
+/** Friendly labels for the capacity-bundle capture echo. */
+const DTI_BUNDLE_LABELS: Record<string, string> = {
+  nonOccupantCoBorrower: "Non-Occupant Co-Borrower",
+  noCbRelationship: "Co-Borrower Relationship",
+  combinedDti: "Combined DTI",
+  householdSize: "Household Size",
+  monthlyResidualIncome: "Monthly Residual Income",
+};
+
+/**
+ * Cross-field conflict registry: a new input that's invalid GIVEN prior inputs.
+ * Returns a plain-language reason (or null). DSCR↔occupancy is handled separately with a
+ * tailored fix; these are the "no clean auto-fix — reset or continue" conflicts. Extend by
+ * adding a rule: a regex on the raw text + a predicate on the already-captured form.
+ */
+function detectInputConflict(raw: string, form: WizardForm): string | null {
+  const isSecondLien = String(form.isSecondLien ?? "").toLowerCase() === "yes";
+  const purpose = String(form.primaryLoanPurpose || form.loanPurpose || "");
+
+  // HELOC / HELOAN is a second-lien product, but the scenario is a first lien.
+  if (
+    /\b(heloc|heloan|home equity (?:line|loan)|second lien)\b/i.test(raw) &&
+    form.isSecondLien &&
+    !isSecondLien
+  ) {
+    return "A HELOC / HELOAN is a second-lien product, but this scenario is set to a first lien.";
+  }
+  // Cash-out is a refinance feature, but the loan purpose is a purchase.
+  if (/\bcash[\s-]?out\b/i.test(raw) && /purchase/i.test(purpose)) {
+    return "Cash-out is a refinance feature, but the loan purpose here is Purchase.";
+  }
+  return null;
+}
+
+/** Which of the borrower's current credit-event codes the removal text refers to. */
+function creditEventsToRemove(raw: string, codes: readonly string[]): string[] {
+  const hay = normForMatch(raw);
+  return codes.filter((code) => creditEventMatchTokens(code).some((t) => hay.includes(t)));
+}
+
+/**
+ * Looser match for an EDIT target (timing/type change) — also accepts bare "ch7"/"ch13"
+ * (removal stays strict to avoid dropping the wrong chapter; edits ask when ambiguous).
+ */
+function creditEventEditMatch(raw: string, codes: readonly string[]): string[] {
+  const hay = normForMatch(raw);
+  return codes.filter((code) => {
+    const toks = creditEventMatchTokens(code);
+    if (code.includes("Ch7")) toks.push("ch7", "ch 7", "chapter 7");
+    if (code.includes("Ch13")) toks.push("ch13", "ch 13", "chapter 13");
+    return toks.some((t) => hay.includes(normForMatch(t)));
+  });
+}
+
+/** New seasoning value from a timing-change phrase — prefers the part after "to". */
+function parseTimingChange(raw: string): string | null {
+  const toMatch = raw.match(/\bto\b(.*)$/i);
+  const seg = (toMatch ? toMatch[1] : raw).trim();
+  const segNorm = normForMatch(seg);
+  for (const b of CREDIT_EVENT_YEAR_BUCKETS) {
+    if (segNorm.includes(normForMatch(b))) return b;
+  }
+  const parsed = parseCreditEventTimingReply(seg);
+  return parsed?.date ?? parsed?.bucket ?? null;
+}
+
+/** Re-key one credit-event code → another (e.g. Ch7 Discharged → Dismissed), moving its timing. */
+function rekeyCreditEventPatch(
+  form: WizardForm,
+  oldCode: string,
+  newCode: string,
+): Partial<WizardForm> {
+  const events = (form.creditEvents ?? []).map((c) => (c === oldCode ? newCode : c));
+  const years = { ...(form.creditEventYears ?? {}) };
+  const dates = { ...(form.creditEventDates ?? {}) };
+  if (years[oldCode] != null) {
+    years[newCode] = years[oldCode];
+    delete years[oldCode];
+  }
+  if (dates[oldCode] != null) {
+    dates[newCode] = dates[oldCode];
+    delete dates[oldCode];
+  }
+  return {
+    creditEvents: [...new Set(events)],
+    creditEventYears: years,
+    creditEventDates: dates,
+    creditEventType: creditEventLabel(newCode),
+  } as Partial<WizardForm>;
+}
+
+/**
+ * Parse a prose loan-preference edit (rate type / IO / term) into a canonical form patch.
+ * The Extractor is unreliable here, so map keywords directly (term parsed by the shared
+ * loan-term reply parser). Returns {} when nothing matched.
+ */
+function tryLoanPrefPatch(raw: string, form: WizardForm): Partial<WizardForm> {
+  const lc = raw.toLowerCase();
+  let out: Partial<WizardForm> = {};
+  if (/\b\d{1,2}\s*(?:year|yr)\b/.test(lc)) {
+    const q = FORM_CHAT_QUESTIONS.find((x) => x.id === "loanTerm");
+    const parsed = q ? parseLoanTermChatReply(raw, formChatProductPrefOptions(q)) : "";
+    if (parsed && parsed !== FORM_CHAT_LOAN_TERM_NO_PREF) {
+      out = { ...out, ...chatAnswerFormPatch(form, "loanTerm", parsed) };
+    }
+  }
+  if (!("loanTerm" in out)) {
+    if (/\b(arm|adjustable)\b/.test(lc)) {
+      out = { ...out, ...chatAnswerFormPatch(form, "rateTypePref", "Adjustable-Rate") };
+    } else if (/\bfixed\b/.test(lc) && !/fixed\s+income/.test(lc)) {
+      out = { ...out, ...chatAnswerFormPatch(form, "rateTypePref", "Fixed") };
+    }
+  }
+  if (/\binterest[\s-]?only\b|\bi\/o\b/.test(lc)) {
+    out = { ...out, ...chatAnswerFormPatch(form, "interestOnlyPref", "Yes") };
+  } else if (/fully\s*amortiz|amortizing|not\s+interest[\s-]?only/.test(lc)) {
+    out = { ...out, ...chatAnswerFormPatch(form, "interestOnlyPref", "No") };
+  }
+  return out;
+}
 
 function chatOptionsPayload(
   form: WizardForm,
@@ -239,6 +447,8 @@ export type UseChatConversationDeps = {
   setLoading: (v: boolean) => void;
   /** Fires when intake is complete and eligibility should run (chat mode). */
   onIntakeReady?: () => void;
+  /** Reset the whole scenario (used by the "reset" command / invalid-input recovery). */
+  onResetScenario?: () => void;
 };
 
 export function useChatConversation(deps: UseChatConversationDeps) {
@@ -670,6 +880,46 @@ export function useChatConversation(deps: UseChatConversationDeps) {
     return decision;
   }, [emitCreditEventsAsk]);
 
+  /**
+   * Re-ask the question currently pending — used after we answer/deflect an interjected
+   * question so the user lands back on the SAME ask, without advancing the cadence or
+   * burning a 2-strike attempt. Mirrors the first-failure form-fallback rendering; falls
+   * back to the normal next ask when nothing specific is pending (e.g. the opening turn).
+   */
+  const reaskPending = useCallback(
+    async (pendingQ: FormChatQuestion | undefined, lead: string) => {
+      const d = depsRef.current;
+      if (pendingQ?.special === "credit_events" || pendingQ?.id === "hasCreditEvent") {
+        emitCreditEventsAsk();
+        return;
+      }
+      if (pendingQ && isFormChatProductPrefQuestion(pendingQ)) {
+        d.appendAssistantChat(`CHAT_PRODUCT_PREF:${JSON.stringify({ questionId: pendingQ.id })}`);
+        return;
+      }
+      if (pendingQ?.kind === "enum" && !pendingQ.special) {
+        const options = optionsFor(d.formSyncRef.current, pendingQ);
+        if (options.length) {
+          // NOT a parse failure — we just answered an interjected question. Use a clean
+          // options card (fallback:false), prefixed with a connector so it reads as a
+          // natural return to the pending question (not a "didn't catch that").
+          const payload = chatOptionsPayload(d.formSyncRef.current, pendingQ, { fallback: false });
+          payload.prompt = `${lead}${payload.prompt}`;
+          d.appendAssistantChat(`CHAT_OPTIONS:${JSON.stringify(payload)}`);
+          return;
+        }
+      }
+      if (pendingQ) {
+        const ask = resolveFormChatPrompt(d.formSyncRef.current, pendingQ);
+        const hint = pendingQ.hint?.trim() ? ` (${pendingQ.hint.trim()})` : "";
+        d.appendAssistantChat(`${lead}${ask}${hint}`);
+        return;
+      }
+      await advance();
+    },
+    [advance, emitCreditEventsAsk],
+  );
+
   const submitUserTurn = useCallback(
     async (text: string) => {
       const d = depsRef.current;
@@ -678,6 +928,168 @@ export function useChatConversation(deps: UseChatConversationDeps) {
       d.appendUserChat(raw);
       d.setLoading(true);
       try {
+        // "reset" / "start over" — wipe the scenario and restart intake. (The reset clears
+        // the thread itself, so no pre-reset message — the welcome reappears.)
+        if (RESET_COMMAND_RE.test(raw)) {
+          if (d.onResetScenario) {
+            d.onResetScenario();
+          } else {
+            d.appendAssistantChat(
+              "To start over, hit Reset at the top of the Mortgage Profile — or keep going and I'll work with your current inputs.",
+            );
+          }
+          return;
+        }
+
+        // Invalid-input guard — a new input that conflicts with prior inputs (e.g. a HELOC on
+        // a first lien, cash-out on a purchase). Don't silently apply it; explain and offer
+        // reset-or-continue. (DSCR↔occupancy has its own tailored handling below.)
+        const conflict = detectInputConflict(raw, d.formSyncRef.current);
+        if (conflict) {
+          d.appendAssistantChat(
+            `${conflict} I haven't applied that — it doesn't fit your earlier inputs. Reply “reset” to start over, or just continue with your current inputs.`,
+          );
+          await advance();
+          return;
+        }
+
+        // DSCR guard — DSCR qualifies on the property's rental cash flow, so it's an
+        // INVESTMENT-property path only. If the user asks for DSCR while occupancy is a
+        // Primary Residence / Second Home, the extractor silently drops it; instead, say
+        // why (the rest of the turn still processes, so other valid fields are captured).
+        let dscrHandled = false;
+        {
+          const occ = String(d.formSyncRef.current.occupancy ?? "").trim();
+          if (/\bdscr\b/i.test(raw) && occ && !/investment/i.test(occ)) {
+            d.appendAssistantChat(
+              `DSCR loans qualify on the property's rental cash flow, so they're only available for investment properties — not a ${occ}. I'll keep this scenario on the income-documentation (DTI) path. If it's actually an investment property, just say so and I'll switch it to DSCR.`,
+            );
+            dscrHandled = true;
+          }
+        }
+
+        // Credit-event removal (esp. at the recap) — "remove Ch7-Disch and Foreclosure".
+        // Drop the named events, blank their timing, then re-offer the selector so the LO
+        // can re-pick (the credit-event UI is a card flow, so prose-correction can't reach it).
+        if (REMOVAL_VERB_RE.test(raw)) {
+          const codes = (d.formSyncRef.current.creditEvents ?? []) as string[];
+          const toRemove = creditEventsToRemove(raw, codes);
+          if (toRemove.length > 0) {
+            const fb = { ...d.formSyncRef.current };
+            const remaining = codes.filter((c) => !toRemove.includes(c));
+            const years = { ...(fb.creditEventYears ?? {}) };
+            const dates = { ...(fb.creditEventDates ?? {}) };
+            toRemove.forEach((c) => {
+              delete years[c];
+              delete dates[c];
+            });
+            const patch: Partial<WizardForm> = {
+              creditEvents: remaining,
+              creditEventYears: years,
+              creditEventDates: dates,
+            };
+            if (remaining.length === 0) {
+              patch.creditEventCategory = "";
+              patch.creditEventType = "";
+            }
+            mergeForm(patch);
+            d.triggerQuickEligibilityScan();
+            d.appendAssistantChat(
+              `Removed ${toRemove.map((c) => creditEventLabel(c)).join(" and ")}.`,
+            );
+            // Blank + re-ask: re-offer the full event list so they can re-pick (or None).
+            pendingChatFieldRef.current = "creditEvents";
+            d.appendAssistantChat(
+              `CHAT_CREDIT_EVENTS:${JSON.stringify({
+                mode: "select",
+                prompt: "Pick everything that still applies — or None.",
+                options: [
+                  { value: CREDIT_EVENT_NONE, label: "None — clean history" },
+                  ...CREDIT_EVENT_SELECT_OPTS,
+                ],
+              })}`,
+            );
+            return;
+          }
+          if (CREDIT_KEYWORDS_RE.test(raw)) {
+            // A credit-event removal that matched none of the current events — say so
+            // (don't silently file it as a scenario note).
+            const have = codes.length ? codes.map((c) => creditEventLabel(c)).join(", ") : "none";
+            d.appendAssistantChat(
+              `I couldn't find that credit event to remove. Current credit events: ${have}. Tell me which one to drop.`,
+            );
+            return;
+          }
+          // Not a credit-event removal — fall through to normal processing.
+        }
+
+        // High-DTI capacity bundle (NOCB / combined DTI / household size / residual income).
+        // These are NOT extractor slots, so parse the prose reply directly; otherwise the
+        // bundle question loops forever. Ask only for what's still missing; after 3 tries,
+        // apply safe defaults and move on.
+        if (
+          pendingChatFieldRef.current === "dtiCapacityExtras" ||
+          pendingChatFieldRef.current === "dtiCapacityNotice"
+        ) {
+          const fb = { ...d.formSyncRef.current };
+          const patch = parseDtiBundleReply(raw);
+          if (Object.keys(patch).length > 0) {
+            mergeForm(patch);
+            const captured = Object.entries(patch).map(([k, v]) => ({
+              label: DTI_BUNDLE_LABELS[k] ?? k,
+              value: String(v),
+            }));
+            d.appendAssistantChat(`CHAT_CAPTURED:${JSON.stringify({ captured, changes: [] })}`);
+            d.triggerQuickEligibilityScan();
+          }
+          const f = d.formSyncRef.current;
+          const need: string[] = [];
+          if (nocbVisible(f) && !String(f.nonOccupantCoBorrower ?? "").trim()) {
+            need.push(
+              "Is there a non-occupant co-borrower (NOCB)? Reply “No”, or “Yes” with the relationship and the combined DTI.",
+            );
+          } else if (
+            f.nonOccupantCoBorrower === "Yes" &&
+            (!String(f.noCbRelationship ?? "").trim() || !String(f.combinedDti ?? "").trim())
+          ) {
+            need.push("For the co-borrower, what's the relationship and the combined DTI?");
+          }
+          if (residualTriggered(f)) {
+            if (!String(f.householdSize ?? "").trim())
+              need.push("What's the household size (number of people)?");
+            if (!String(f.monthlyResidualIncome ?? "").trim())
+              need.push("What's the monthly residual income (e.g. $4,300)?");
+          }
+          if (need.length === 0) {
+            delete attemptsRef.current.dtiCapacityExtras;
+            await advance();
+            return;
+          }
+          const tries = (attemptsRef.current.dtiCapacityExtras =
+            (attemptsRef.current.dtiCapacityExtras ?? 0) + 1);
+          if (tries >= 3) {
+            const def: Partial<WizardForm> = {};
+            if (nocbVisible(f) && !String(f.nonOccupantCoBorrower ?? "").trim())
+              def.nonOccupantCoBorrower = "No";
+            if (residualTriggered(f)) {
+              if (!String(f.householdSize ?? "").trim()) def.householdSize = "1";
+              if (!String(f.monthlyResidualIncome ?? "").trim()) def.monthlyResidualIncome = "0";
+            }
+            mergeForm(def);
+            delete attemptsRef.current.dtiCapacityExtras;
+            d.appendAssistantChat(
+              "No problem — I'll assume no co-borrower and use placeholder residual figures for now, and move on. You can adjust these anytime from the Mortgage Profile.",
+            );
+            d.triggerQuickEligibilityScan();
+            await advance();
+            return;
+          }
+          // Ask for the first missing piece (keep the bundle pending).
+          d.appendAssistantChat(need[0]);
+          pendingChatFieldRef.current = "dtiCapacityExtras";
+          return;
+        }
+
         // Reinforcement reply — confirm or correct a queued inferred/ambiguous value first.
         if (reinforceQueueRef.current.length > 0) {
           const item = reinforceQueueRef.current[0];
@@ -763,6 +1175,97 @@ export function useChatConversation(deps: UseChatConversationDeps) {
         if (pendingChatFieldRef.current === "scenarioNotes") {
           const skip = isFormChatSkipMessage(raw) || CONTINUE_RE.test(raw) || AFFIRM_RE.test(raw);
           if (!skip) {
+            // Recap edits the Extractor can't reach: credit-event timing / BK chapter-status
+            // change, and loan-preference (rate type / IO / term) changes. Handle these
+            // deterministically before falling back to generic field extraction.
+            const recapForm = d.formSyncRef.current;
+            const ceCodes = (recapForm.creditEvents ?? []) as string[];
+            if (ceCodes.length > 0 && CREDIT_KEYWORDS_RE.test(raw)) {
+              // BK chapter/status re-key (e.g. "Ch7 was dismissed not discharged").
+              const newBk = bkCodeFromFreeText(raw);
+              const bks = ceCodes.filter((c) => c.startsWith("BK"));
+              if (newBk && bks.length === 1 && bks[0] !== newBk && !ceCodes.includes(newBk)) {
+                const oldBk = bks[0];
+                mergeForm(rekeyCreditEventPatch(recapForm, oldBk, newBk));
+                d.triggerQuickEligibilityScan();
+                d.appendAssistantChat(
+                  `CHAT_CAPTURED:${JSON.stringify({
+                    captured: [],
+                    changes: [
+                      {
+                        label: "Bankruptcy",
+                        from: creditEventLabel(oldBk),
+                        to: creditEventLabel(newBk),
+                      },
+                    ],
+                  })}`,
+                );
+                await advance();
+                return;
+              }
+              // Timing change (e.g. "change Ch7 from <1 year to >4 years").
+              const newTiming = parseTimingChange(raw);
+              if (newTiming) {
+                const matched = creditEventEditMatch(raw, ceCodes);
+                const target =
+                  matched.length === 1
+                    ? matched[0]
+                    : matched.length === 0 && ceCodes.length === 1
+                      ? ceCodes[0]
+                      : null;
+                if (target) {
+                  const oldT = recapForm.creditEventYears?.[target] ?? "";
+                  mergeForm(creditEventTimingPatch(recapForm, target, newTiming));
+                  d.triggerQuickEligibilityScan();
+                  d.appendAssistantChat(
+                    `CHAT_CAPTURED:${JSON.stringify({
+                      captured: [],
+                      changes: [
+                        {
+                          label: `${creditEventLabel(target)} timing`,
+                          from: oldT || "—",
+                          to: newTiming,
+                        },
+                      ],
+                    })}`,
+                  );
+                  await advance();
+                  return;
+                }
+                // Couldn't tell which event — ask (don't save as a note).
+                d.appendAssistantChat(
+                  `Which event should I set to ${newTiming}? Current: ${ceCodes
+                    .map((c) => creditEventLabel(c))
+                    .join(", ")}.`,
+                );
+                return;
+              }
+            }
+
+            // Loan-preference edit (rate type / IO / term).
+            const prefPatch = tryLoanPrefPatch(raw, recapForm);
+            if (Object.keys(prefPatch).length > 0) {
+              const fb = { ...recapForm };
+              mergeForm(prefPatch);
+              for (const id of FORM_CHAT_PRODUCT_PREF_IDS) {
+                if (id in prefPatch) {
+                  markProductPrefConfirmed(id);
+                  const slot = resolveIntakeTargetSlot(d.formSyncRef.current, id);
+                  const val = (prefPatch as Record<string, unknown>)[id];
+                  if (slot && typeof val === "string") {
+                    portfolioRef.current = { ...portfolioRef.current, [slot]: val };
+                  }
+                }
+              }
+              d.triggerQuickEligibilityScan();
+              const changes = changedRowsFromPatch(fb, prefPatch);
+              if (changes.length > 0) {
+                d.appendAssistantChat(`CHAT_CAPTURED:${JSON.stringify({ captured: [], changes })}`);
+              }
+              await advance();
+              return;
+            }
+
             let hadCorrections = false;
             try {
               const formBefore = { ...d.formSyncRef.current };
@@ -797,6 +1300,21 @@ export function useChatConversation(deps: UseChatConversationDeps) {
             } catch (err) {
               console.error("scenario field extract:", err);
             }
+            if (hadCorrections) {
+              // An edit was applied — re-render the recap with the updated values. Do NOT
+              // also file the edit text as a Scenario Note.
+              d.triggerQuickEligibilityScan();
+              await advance();
+              return;
+            }
+            // Nothing applied. Tell apart a failed EDIT command (say so, don't save) from a
+            // genuine free-text scenario note (keep it).
+            if (EDIT_COMMAND_RE.test(raw)) {
+              d.appendAssistantChat(
+                "I couldn't apply that change. Try something like “change LTV to 75”, “make it a condo”, “remove the foreclosure”, or “rate type ARM”.",
+              );
+              return; // keep the recap open; don't pollute Scenario Notes
+            }
             try {
               const items = await extractScenarioNotes(raw, { source: "chat" });
               if (items.length) d.applyScenarioNotesDelta(items as unknown[]);
@@ -804,12 +1322,6 @@ export function useChatConversation(deps: UseChatConversationDeps) {
               console.error("scenario notes extract:", err);
             }
             d.triggerQuickEligibilityScan();
-            if (hadCorrections) {
-              // Keep the recap open — re-render it with the updated values (or ask any
-              // question the correction re-opened). User sends Skip when done changing.
-              await advance();
-              return;
-            }
           }
           scenarioCapturedRef.current = true;
           await advance();
@@ -1012,20 +1524,70 @@ export function useChatConversation(deps: UseChatConversationDeps) {
         }
         d.triggerQuickEligibilityScan();
 
-        // Gibberish guard + 2-strike skip — if the turn yielded nothing (no fields, no
+        // Gibberish guard + 3-strike skip — if the turn yielded nothing (no fields, no
         // short-reply match), don't advance as if understood. Scenario notes alone do NOT
-        // count when a structured enum/number is pending. First failure re-asks with
-        // options/hint; a second failure skips or assumes the safe default (plan §6).
+        // count when a structured enum/number is pending. Early failures re-ask with
+        // options/hint; the 3rd failure skips or assumes the safe default.
+        // Opening turn: nothing has been asked or captured yet. A question like "do you
+        // give jumbo loans?" extracts no structured field but the LLM often files it as a
+        // scenario note — which must NOT count as "understood" (that would skip the answer
+        // and jump to the first question). So on the opening turn, notes alone don't qualify.
+        const openingTurn = turnRef.current === 0 && !pendingChatFieldRef.current;
         const understood =
-          structuredAnswered || (!structuredPending && (res.scenario_notes_delta?.length ?? 0) > 0);
+          structuredAnswered ||
+          (!structuredPending && !openingTurn && (res.scenario_notes_delta?.length ?? 0) > 0);
         if (!understood) {
           const pendingQ = FORM_CHAT_QUESTIONS.find((q) => q.id === pendingChatFieldRef.current);
+
+          // Already explained the DSCR/occupancy conflict above — don't ALSO run the
+          // "did not understand" classifier (it would re-answer the same thing). Just
+          // continue: re-ask the pending question, or move on if none is pending.
+          if (dscrHandled) {
+            if (pendingQ) {
+              await reaskPending(pendingQ, "Coming back to our previous question:\n\n");
+            } else {
+              await advance();
+            }
+            return;
+          }
+
+          // The turn produced no scenario data. Before treating it as a failed answer,
+          // classify it: an on-topic capability question gets answered, an off-topic or
+          // abusive message gets a brief deflection — then we re-ask the SAME pending
+          // question. An interjected question must NOT burn a 2-strike attempt.
+          const assist = await intakeAssist(d.apiBase, {
+            text: raw,
+            pending_question: pendingQ
+              ? resolveFormChatPrompt(d.formSyncRef.current, pendingQ)
+              : "",
+            mode: d.mode,
+          });
+          if (assist.intent !== "data" && assist.answer) {
+            // Opening turn (nothing asked or captured yet): keep it to ONE message and
+            // steer them to describe the scenario — don't split into two bubbles and
+            // don't jump into the first question off a junk/abuse opener.
+            if (!pendingQ && turnRef.current === 0) {
+              d.appendAssistantChat(`${assist.answer}\n\n${SCENARIO_DESCRIBE_INVITE}`);
+              return;
+            }
+            d.appendAssistantChat(assist.answer);
+            await reaskPending(pendingQ, "Coming back to our previous question:\n\n");
+            return;
+          }
+
+          // Opening turn, scenario-ish but no structured field yet (assist says "data"):
+          // start the guided flow rather than nagging "could you add more detail".
+          if (openingTurn) {
+            await advance();
+            return;
+          }
+
           const failedId = pendingChatFieldRef.current;
           const attempts = failedId
             ? (attemptsRef.current[failedId] = (attemptsRef.current[failedId] ?? 0) + 1)
             : 1;
 
-          if (attempts >= 2 && failedId && pendingQ) {
+          if (attempts >= 3 && failedId && pendingQ) {
             const def = pendingQ.safeDefault?.trim();
             if (def) {
               // Assume the safe default, keep moving; the sidebar stays the escape hatch.
@@ -1158,6 +1720,7 @@ export function useChatConversation(deps: UseChatConversationDeps) {
       emitCreditEventsAsk,
       markProductPrefConfirmed,
       mergeForm,
+      reaskPending,
       syncProductPrefsFromForm,
     ],
   );
