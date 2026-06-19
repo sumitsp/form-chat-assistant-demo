@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy form-chat-assistant
+    name: Deploy form-chat-assistant-demo
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -32,7 +32,7 @@ jobs:
             COMPOSE_DIR="${{ secrets.DEPLOY_COMPOSE_DIR }}"
             SERVICE="form-chat-assistant"
             REPO_DIR="${COMPOSE_DIR}/form-chat-assistant"
-            REPO_SLUG="abhinavdg-ever/form-chat-assistant"
+            REPO_SLUG="sumitsp/form-chat-assistant-demo"
 
             if [ ! -f "${COMPOSE_DIR}/docker-compose.yml" ]; then
               echo "Missing ${COMPOSE_DIR}/docker-compose.yml"
