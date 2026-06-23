@@ -70,7 +70,7 @@ docker exec <container> supervisorctl status   # see all four programs
 
 ### Deployment / CI
 
-**Pushing to `main` auto-deploys to production.** `.github/workflows/deploy-main.yml` triggers on every push to `main`: it SSHes to the prod host, does `git reset --hard origin/main`, then `docker compose up -d --build form-chat-assistant`, and health-checks `http://127.0.0.1:8082/api/health` (host 8082 → container 8000). Treat a merge to `main` as a production release. Required CI secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_PASSWORD`, `DEPLOY_COMPOSE_DIR` (the old `docs/DEPLOY.md` walkthrough is in git history if needed). There is no test/lint CI gate — only the deploy job — so run `npm run lint` / `npm run format` locally before pushing.
+**Pushing to `main` auto-deploys to production.** `.github/workflows/deploy-main.yml` triggers on every push to `main`: it SSHes to the prod host, forces the deployed checkout remote to `git@github.com:sumitsp/form-chat-assistant-demo.git`, does `git fetch origin main && git reset --hard origin/main`, then `docker compose up -d --build "${SERVICE}"` and health-checks `http://127.0.0.1:8082/api/health` (host 8082 → container 8000). `SERVICE` comes from `DEPLOY_SERVICE` (defaults to `form-chat-assistant-demo` if unset). If `${REPO_DIR}/.env` is missing, the workflow writes it from `DEPLOY_APP_ENV`. Treat a merge to `main` as a production release. Required CI secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_PASSWORD`, `DEPLOY_COMPOSE_DIR`; optional: `DEPLOY_SERVICE`, `DEPLOY_APP_ENV`. There is no test/lint CI gate — only the deploy job — so run `npm run lint` / `npm run format` locally before pushing.
 
 ### Database
 

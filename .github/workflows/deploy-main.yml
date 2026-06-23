@@ -28,10 +28,13 @@ jobs:
           script: |
             set -euo pipefail
 
-            # Parent "apps/" folder: docker-compose.yml + form-chat-assistant/ as siblings.
+            # Parent "apps/" folder: docker-compose.yml + app repo folder as siblings.
             COMPOSE_DIR="${{ secrets.DEPLOY_COMPOSE_DIR }}"
-            SERVICE="form-chat-assistant"
-            REPO_DIR="${COMPOSE_DIR}/form-chat-assistant"
+            SERVICE="${{ secrets.DEPLOY_SERVICE }}"
+            if [ -z "${SERVICE}" ]; then
+              SERVICE="form-chat-assistant-demo"
+            fi
+            REPO_DIR="${COMPOSE_DIR}/${SERVICE}"
             REPO_SLUG="sumitsp/form-chat-assistant-demo"
 
             if [ ! -f "${COMPOSE_DIR}/docker-compose.yml" ]; then
@@ -69,11 +72,10 @@ jobs:
               fi
             fi
 
-            echo "==> Recreate ${SERVICE} container (stop, rm, prune, compose up --build)"
+            echo "==> Recreate ${SERVICE} container (stop, rm, compose up --build)"
             cd "${COMPOSE_DIR}"
             docker stop "${SERVICE}" 2>/dev/null || true
             docker rm "${SERVICE}" 2>/dev/null || true
-            docker system prune --volumes -f
             docker compose up -d --build "${SERVICE}"
 
             echo "==> Health check (backend :8082 -> container :8080)"
