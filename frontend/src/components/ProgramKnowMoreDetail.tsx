@@ -305,7 +305,6 @@ export function ProgramKnowMoreDetail({
     },
   ].filter(Boolean) as MetricsRow[];
 
-  const showBestMatchCol = bm != null;
   const hasScenarioData = scenario != null && metricsRows.some((r) => r.scenarioValue != null);
 
   const stableProgramKey = programSelectKey(prog);
@@ -443,20 +442,6 @@ export function ProgramKnowMoreDetail({
                     <span className="text-muted-foreground">Program limit: </span>
                     <span className="text-foreground">{row.programLimit}</span>
                   </div>
-                  {showBestMatchCol && (
-                    <div>
-                      <span className="text-muted-foreground">Best match: </span>
-                      <span
-                        className={cn(
-                          row.bestMatchPass === true
-                            ? "font-medium text-emerald-600"
-                            : "text-foreground",
-                        )}
-                      >
-                        {row.bestMatch}
-                      </span>
-                    </div>
-                  )}
                   {hasScenarioData && row.scenarioValue && (
                     <div>
                       <span className="text-muted-foreground">Borrower: </span>
@@ -477,18 +462,13 @@ export function ProgramKnowMoreDetail({
           </dl>
           <div className="hidden overflow-hidden rounded-lg border border-border sm:block">
             <table className="w-full table-fixed border-collapse">
-              {(showBestMatchCol || hasScenarioData) && (
+              {hasScenarioData && (
                 <thead>
                   <tr className="border-b border-border bg-muted/20">
                     <th className="w-[28%] px-3 py-1" />
                     <th className="px-3 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                       Program Limit
                     </th>
-                    {showBestMatchCol && (
-                      <th className="px-3 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Best Match
-                      </th>
-                    )}
                     {hasScenarioData && (
                       <th className="px-3 py-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                         Borrower's Value
@@ -515,20 +495,6 @@ export function ProgramKnowMoreDetail({
                         {row.programLimit}
                       </span>
                     </td>
-                    {showBestMatchCol && (
-                      <td className="px-3 py-1.5">
-                        <span
-                          className={cn(
-                            "tabular-nums",
-                            row.bestMatchPass === true
-                              ? "font-medium text-emerald-600"
-                              : "text-foreground",
-                          )}
-                        >
-                          {row.bestMatch}
-                        </span>
-                      </td>
-                    )}
                     {hasScenarioData && (
                       <td className="px-3 py-1.5">
                         {row.scenarioValue ? (
