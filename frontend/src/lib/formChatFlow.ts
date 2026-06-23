@@ -44,6 +44,7 @@ import {
   effectivePrimaryLoanPurpose,
   formatLoanTermDisplay,
   formatLoanTermStorage,
+  formatMoneyForInput,
 } from "@/lib/nqmIntegratedForm";
 import { STATES } from "@/lib/wizardFormUi";
 import {
@@ -297,7 +298,6 @@ export interface FormChatQuestion {
     | "geo_followup"
     | "county_search"
     | "capacity_dti_notice"
-    | "capacity_dti_bundle"
     | "product_pref";
 }
 
@@ -456,7 +456,7 @@ export function productPrefAnswerLabel(qId: string, form: WizardForm): string {
 
 /** Primary NOCB and/or residual-income follow-up when DTI is high. */
 export function capacityDtiExtrasVisible(wizard: WizardForm): boolean {
-  return nocbVisible(wizard) || residualTriggered(wizard);
+  return nocbVisible(wizard) || residualFollowupRequired(wizard);
 }
 
 // ── Predicate helpers ────────────────────────────────────────────────────────
@@ -715,6 +715,10 @@ export const nocbVisible = (wizard: WizardForm) =>
   wizard.primaryLoanPurpose !== "Cash-Out Refinance" &&
   (parseFloat(wizard.estimatedDti) || 0) > 43 &&
   wizard.citizenship !== "Foreign National";
+export const nocbBranchComplete = (wizard: WizardForm): boolean =>
+  !nocbVisible(wizard) ||
+  wizard.nonOccupantCoBorrower === "No" ||
+  (!!wizard.noCbRelationship.trim() && !!wizard.combinedDti.trim());
 const isStepdownNA = (prepay: string) =>
   !prepay || prepay === "No Penalty" || prepay === "1 Year" || prepay === "2 Year";
 // Residual income matters for primary/second-home loans once the (effective) DTI > 43%.
@@ -722,11 +726,31 @@ const effectiveDtiNum = (wizard: WizardForm) =>
   wizard.nonOccupantCoBorrower === "Yes" && wizard.combinedDti
     ? parseFloat(wizard.combinedDti) || 0
     : parseFloat(wizard.estimatedDti) || 0;
-export const residualTriggered = (wizard: WizardForm) =>
+const residualFollowupRequired = (wizard: WizardForm) =>
   !isDscr(wizard) &&
   (wizard.occupancy === "Primary Residence" || wizard.occupancy === "Second Home") &&
   !!wizard.estimatedDti.trim() &&
-  effectiveDtiNum(wizard) > 43;
+  (parseFloat(wizard.estimatedDti) || 0) > 43;
+export const residualTriggered = (wizard: WizardForm) =>
+  residualFollowupRequired(wizard) && effectiveDtiNum(wizard) > 43;
+export const residualQuestionsVisible = (wizard: WizardForm): boolean =>
+  residualFollowupRequired(wizard) && nocbBranchComplete(wizard);
+
+function capacityFollowupsComplete(form: WizardForm): boolean {
+  if (nocbVisible(form)) {
+    if (!form.nonOccupantCoBorrower.trim()) return false;
+    if (
+      form.nonOccupantCoBorrower === "Yes" &&
+      (!form.noCbRelationship.trim() || !form.combinedDti.trim())
+    ) {
+      return false;
+    }
+  }
+  if (residualFollowupRequired(form)) {
+    if (!form.householdSize.trim() || !form.monthlyResidualIncome.trim()) return false;
+  }
+  return true;
+}
 
 export function effectiveDtiPercent(wizard: WizardForm): number {
   return effectiveDtiNum(wizard);
@@ -1005,9 +1029,6 @@ export function resolveFormChatPrompt(form: WizardForm, q: FormChatQuestion): st
   }
   const staticPrompt = q.prompt.trim();
   if (staticPrompt) return staticPrompt;
-  if (q.special === "capacity_dti_bundle") {
-    return "Share any Non-Occupant Co-Borrower details, combined DTI, household size, and monthly residual income that apply.";
-  }
   return "Could you add a bit more detail?";
 }
 
@@ -1235,7 +1256,8 @@ export const FORM_CHAT_QUESTIONS: FormChatQuestion[] = [
     id: "investmentIncomePath",
     section: 1,
     sectionName: "Basics",
-    prompt: "How will this investment property qualify?",
+    prompt:
+      "How will this investment property qualify — on the borrower's personal income (documentation), or on the property's rental income (DSCR)?",
     kind: "enum",
     priority: "mandatory",
     options: INVESTMENT_INCOME_TYPE_OPTIONS.map(toOpt),
@@ -1290,21 +1312,63 @@ export const FORM_CHAT_QUESTIONS: FormChatQuestion[] = [
     section: 2,
     sectionName: "Capacity",
     prompt:
-      "Since DTI is higher than the allowed threshold (43%), we need a few additional details — about any Non-Occupant Co-Borrower (NOCB) and your residual income — to find programs that fit.",
+      "Since DTI is higher than the allowed threshold (43%), we need a few additional details — about any Non-Occupant Co-Borrower (NOCB).",
     kind: "yesno",
     priority: "mandatory",
     showIf: capacityDtiExtrasVisible,
     special: "capacity_dti_notice",
   },
   {
-    id: "dtiCapacityExtras",
+    id: "nonOccupantCoBorrower",
     section: 2,
     sectionName: "Capacity",
-    prompt: "",
+    prompt: "Do you have a non-occupant co-borrower to help you qualify?",
     kind: "yesno",
     priority: "mandatory",
-    showIf: capacityDtiExtrasVisible,
-    special: "capacity_dti_bundle",
+    showIf: nocbVisible,
+  },
+  {
+    id: "noCbRelationship",
+    section: 2,
+    sectionName: "Capacity",
+    prompt: "What is the co-borrower's relationship to the primary borrower?",
+    kind: "enum",
+    priority: "mandatory",
+    options: NOCB_RELATIONSHIP_OPTIONS.map((o) => ({ value: o, label: o })),
+    showIf: (f) => nocbVisible(f) && f.nonOccupantCoBorrower === "Yes",
+  },
+  {
+    id: "combinedDti",
+    section: 2,
+    sectionName: "Capacity",
+    prompt: "What's the combined DTI with the non-occupant co-borrower included?",
+    kind: "number",
+    priority: "mandatory",
+    suffix: "%",
+    placeholder: "e.g. 38",
+    showIf: (f) =>
+      nocbVisible(f) && f.nonOccupantCoBorrower === "Yes" && !!f.noCbRelationship.trim(),
+  },
+  {
+    id: "householdSize",
+    section: 2,
+    sectionName: "Capacity",
+    prompt: "What's the household size (number of people)?",
+    kind: "number",
+    priority: "mandatory",
+    placeholder: "e.g. 3",
+    showIf: residualQuestionsVisible,
+  },
+  {
+    id: "monthlyResidualIncome",
+    section: 2,
+    sectionName: "Capacity",
+    prompt: "What's the monthly residual income (after housing and debts)?",
+    kind: "number",
+    priority: "mandatory",
+    prefix: "$",
+    placeholder: "e.g. 2,500",
+    showIf: (f) => residualQuestionsVisible(f) && !!f.householdSize.trim(),
   },
   {
     id: "dscr",
@@ -1330,7 +1394,8 @@ export const FORM_CHAT_QUESTIONS: FormChatQuestion[] = [
     id: "prepaymentTerms",
     section: 2,
     sectionName: "Capacity",
-    prompt: "What prepayment penalty term is acceptable?",
+    prompt:
+      "What prepayment penalty term is acceptable — e.g. No Penalty, or a 1, 2, 3, 4, or 5-year prepay?",
     kind: "enum",
     priority: "mandatory",
     options: PREPAY_OPTS,
@@ -1382,7 +1447,8 @@ export const FORM_CHAT_QUESTIONS: FormChatQuestion[] = [
     id: "paymentHistory",
     section: 3,
     sectionName: "Credit",
-    prompt: "What's the borrower's housing payment history over the last 12 months?",
+    prompt:
+      "What's the borrower's housing payment history over the last 12 months — e.g. 0×30 (no late payments), or any 30/60/120-day lates?",
     kind: "enum",
     priority: "mandatory",
     options: PAYMENT_HISTORY_OPTIONS.map(toOpt),
@@ -1713,21 +1779,7 @@ export function isAnswered(form: WizardForm, q: FormChatQuestion): boolean {
     if (!countyNeedsGeoFollowUp(form.state, form.stateCounty)) return true;
     return nextRequiredGeoField(form) === null;
   }
-  if (q.special === "capacity_dti_bundle") {
-    if (nocbVisible(form)) {
-      if (!form.nonOccupantCoBorrower.trim()) return false;
-      if (
-        form.nonOccupantCoBorrower === "Yes" &&
-        (!form.noCbRelationship.trim() || !form.combinedDti.trim())
-      ) {
-        return false;
-      }
-    }
-    if (residualTriggered(form)) {
-      if (!form.householdSize.trim() || !form.monthlyResidualIncome.trim()) return false;
-    }
-    return true;
-  }
+  if (q.special === "capacity_dti_notice") return !capacityDtiExtrasVisible(form);
   if (q.special === "triangle") {
     // The Loan Details group captures value/loan/LTV plus the lien-specific fields —
     // completeness comes from the shared loanDetailsFieldSpec (labels spec).
@@ -1768,9 +1820,6 @@ export function optionsFor(form: WizardForm, q: FormChatQuestion): ReadonlyArray
   return q.options ?? [];
 }
 
-const CAPACITY_DTI_BUNDLE_Q = () =>
-  FORM_CHAT_QUESTIONS.find((x) => x.special === "capacity_dti_bundle") ?? null;
-
 /** Driver-aware answered check (product prefs need an explicit Confirm in chat). */
 export function isFormChatQuestionAnswered(
   form: WizardForm,
@@ -1782,17 +1831,10 @@ export function isFormChatQuestionAnswered(
   }
   if (q.priority === "optional" && answeredQIds?.has(q.id)) return true;
   if (isFormChatSkippedQuestion(q, form, answeredQIds)) return true;
-  // High-DTI notice + NOCB/residual bundle: require in-chat Confirm on first pass,
-  // but treat as done when form fields are already filled (resume / post-edit).
-  if (q.special === "capacity_dti_notice" || q.special === "capacity_dti_bundle") {
+  if (q.special === "capacity_dti_notice") {
     if (!capacityDtiExtrasVisible(form)) return true;
-    if (q.special === "capacity_dti_notice") {
-      if (answeredQIds?.has(q.id)) return true;
-      const bundle = CAPACITY_DTI_BUNDLE_Q();
-      return bundle ? isAnswered(form, bundle) : false;
-    }
-    // Bundle always needs live form values — a stale transcript bubble is not enough.
-    return isAnswered(form, q);
+    if (answeredQIds?.has(q.id)) return true;
+    return capacityFollowupsComplete(form);
   }
   return isAnswered(form, q);
 }
@@ -1926,12 +1968,21 @@ export function applyFormChatAnswer(
     Object.assign(patch, clearGeoFollowupFieldsPatch());
     Object.assign(patch, inferGeoFollowupsFromCounty(form.state, stored));
   }
+  if (q.id === "nonOccupantCoBorrower" && stored === "No") {
+    patch.noCbRelationship = "";
+    patch.combinedDti = "";
+    patch.noCbFico = "";
+    patch.noCbIncome = "";
+  }
   if (q.id === "valueSalesPrice" || q.id === "loanAmount") {
     const valueStr = q.id === "valueSalesPrice" ? value : form.valueSalesPrice;
     const loanStr = q.id === "loanAmount" ? value : form.loanAmount;
     if (valueStr.trim() && loanStr.trim()) {
       patch.ltv = computeLtvPercent(loanStr, valueStr);
     }
+  }
+  if (q.id === "monthlyResidualIncome") {
+    patch.monthlyResidualIncome = formatMoneyForInput(stored);
   }
 
   return patch as Partial<WizardForm>;
@@ -2012,13 +2063,13 @@ export function resolveFormChatEditQuestionId(fieldKey: string): string {
     isInIndianapolis: "stateGeoFollowup",
     isInMemphis: "stateGeoFollowup",
     isInLubbock: "stateGeoFollowup",
-    nonOccupantCoBorrower: "dtiCapacityExtras",
-    noCbRelationship: "dtiCapacityExtras",
-    noCbFico: "dtiCapacityExtras",
-    noCbIncome: "dtiCapacityExtras",
-    combinedDti: "dtiCapacityExtras",
-    householdSize: "dtiCapacityExtras",
-    monthlyResidualIncome: "dtiCapacityExtras",
+    nonOccupantCoBorrower: "nonOccupantCoBorrower",
+    noCbRelationship: "noCbRelationship",
+    noCbFico: "noCbRelationship",
+    noCbIncome: "noCbRelationship",
+    combinedDti: "combinedDti",
+    householdSize: "householdSize",
+    monthlyResidualIncome: "monthlyResidualIncome",
   };
   return FIELD_TO_QUESTION_ID[resolved] ?? resolved;
 }
@@ -2039,6 +2090,24 @@ function clearFieldsForQuestion(qId: string, target: Record<string, unknown>): v
     for (const k of geoSubFieldKeys()) {
       if (k !== "stateCounty") target[k] = "";
     }
+  } else if (qId === "nonOccupantCoBorrower") {
+    target.nonOccupantCoBorrower = "";
+    target.noCbRelationship = "";
+    target.noCbFico = "";
+    target.noCbIncome = "";
+    target.combinedDti = "";
+  } else if (qId === "noCbRelationship") {
+    target.noCbRelationship = "";
+    target.noCbFico = "";
+    target.noCbIncome = "";
+    target.combinedDti = "";
+  } else if (qId === "combinedDti") {
+    target.combinedDti = "";
+  } else if (qId === "householdSize") {
+    target.householdSize = "";
+    target.monthlyResidualIncome = "";
+  } else if (qId === "monthlyResidualIncome") {
+    target.monthlyResidualIncome = "";
   } else if (
     qId === "dtiCapacityExtras" ||
     qId === "nocbCapacity" ||

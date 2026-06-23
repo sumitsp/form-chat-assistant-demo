@@ -67,8 +67,6 @@ import {
   isNoProductPreference,
   mandatoryComplete,
   isStructuredPendingQuestion,
-  nocbVisible,
-  residualTriggered,
   nextRequiredGeoField,
   optionsFor,
   portfolioSlotForFormField,
@@ -176,45 +174,6 @@ function creditEventMatchTokens(code: string): string[] {
 /** A bare "reset / start over" command — wipes the scenario and restarts intake. */
 const RESET_COMMAND_RE =
   /^\s*(reset|start over|start again|restart|clear (?:everything|all|it))\b/i;
-
-/**
- * Parse the high-DTI capacity bundle from prose. These fields (NOCB / combined DTI /
- * household size / residual income) are NOT extractor slots, so chat must parse them
- * directly or the bundle question loops forever.
- */
-function parseDtiBundleReply(raw: string): Partial<WizardForm> {
-  const lc = raw.toLowerCase();
-  const out: Record<string, string> = {};
-  if (
-    /\bno\b[^.]*\b(co-?borrower|nocb|non-?occupant)\b/.test(lc) ||
-    /\b(co-?borrower|nocb|non-?occupant)\b[^.]*\bno\b/.test(lc) ||
-    /\bno\s+co-?borrower\b/.test(lc)
-  ) {
-    out.nonOccupantCoBorrower = "No";
-  } else if (
-    /\b(yes|have|has|there'?s|with)\b[^.]*\b(co-?borrower|nocb|non-?occupant)\b/.test(lc)
-  ) {
-    out.nonOccupantCoBorrower = "Yes";
-  }
-  const hh =
-    lc.match(/household\s*(?:size)?\s*(?:is|of|=|:|-)?\s*(\d+)/) ||
-    lc.match(/(\d+)\s*(?:people|persons|members|in\s+(?:the\s+)?household)/);
-  if (hh) out.householdSize = hh[1];
-  const ri = lc.match(/residual\s*(?:income)?\s*(?:is|of|=|:|-)?\s*\$?\s*([\d,]+)/);
-  if (ri) out.monthlyResidualIncome = ri[1].replace(/,/g, "");
-  const cd = lc.match(/combined\s*dti\s*(?:is|of|=|:|-)?\s*(\d+(?:\.\d+)?)\s*%?/);
-  if (cd) out.combinedDti = cd[1];
-  return out as Partial<WizardForm>;
-}
-
-/** Friendly labels for the capacity-bundle capture echo. */
-const DTI_BUNDLE_LABELS: Record<string, string> = {
-  nonOccupantCoBorrower: "Non-Occupant Co-Borrower",
-  noCbRelationship: "Co-Borrower Relationship",
-  combinedDti: "Combined DTI",
-  householdSize: "Household Size",
-  monthlyResidualIncome: "Monthly Residual Income",
-};
 
 /**
  * Cross-field conflict registry: a new input that's invalid GIVEN prior inputs.
@@ -467,6 +426,8 @@ export function useChatConversation(deps: UseChatConversationDeps) {
   const optionalsSkippedRef = useRef(false);
   /** Product prefs default to "No preference" — track explicit confirms in chat. */
   const productPrefConfirmedRef = useRef<Set<string>>(new Set());
+  /** Notice-only prompts that need explicit chat acknowledgement. */
+  const answeredQIdsRef = useRef<Set<string>>(new Set());
   const [productPrefConfirmed, setProductPrefConfirmed] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -684,6 +645,7 @@ export function useChatConversation(deps: UseChatConversationDeps) {
     const d = depsRef.current;
     let missing = missingChatQuestions(d.formSyncRef.current, d.mode, {
       productPrefConfirmed: productPrefConfirmedRef.current,
+      answeredQIds: answeredQIdsRef.current,
     });
     if (optionalsSkippedRef.current) {
       missing = missing.filter(
@@ -750,6 +712,15 @@ export function useChatConversation(deps: UseChatConversationDeps) {
     if (CHAT_ASK_FORMATS.has(decision.format)) {
       turnRef.current += 1;
       recentAsksRef.current = [...recentAsksRef.current.slice(-3), text.slice(0, 200)];
+    }
+
+    // High-DTI notice is display-only: show it, mark acknowledged, and immediately
+    // continue to the first real follow-up question in the same turn.
+    if (decision.pendingChatField === "dtiCapacityNotice") {
+      d.appendAssistantChat(text);
+      answeredQIdsRef.current.add("dtiCapacityNotice");
+      await advance();
+      return decision;
     }
 
     // Credit events — always the form-like card flow (combined gate+events select,
@@ -1023,70 +994,11 @@ export function useChatConversation(deps: UseChatConversationDeps) {
           // Not a credit-event removal — fall through to normal processing.
         }
 
-        // High-DTI capacity bundle (NOCB / combined DTI / household size / residual income).
-        // These are NOT extractor slots, so parse the prose reply directly; otherwise the
-        // bundle question loops forever. Ask only for what's still missing; after 3 tries,
-        // apply safe defaults and move on.
-        if (
-          pendingChatFieldRef.current === "dtiCapacityExtras" ||
-          pendingChatFieldRef.current === "dtiCapacityNotice"
-        ) {
-          const fb = { ...d.formSyncRef.current };
-          const patch = parseDtiBundleReply(raw);
-          if (Object.keys(patch).length > 0) {
-            mergeForm(patch);
-            const captured = Object.entries(patch).map(([k, v]) => ({
-              label: DTI_BUNDLE_LABELS[k] ?? k,
-              value: String(v),
-            }));
-            d.appendAssistantChat(`CHAT_CAPTURED:${JSON.stringify({ captured, changes: [] })}`);
-            d.triggerQuickEligibilityScan();
-          }
-          const f = d.formSyncRef.current;
-          const need: string[] = [];
-          if (nocbVisible(f) && !String(f.nonOccupantCoBorrower ?? "").trim()) {
-            need.push(
-              "Is there a non-occupant co-borrower (NOCB)? Reply “No”, or “Yes” with the relationship and the combined DTI.",
-            );
-          } else if (
-            f.nonOccupantCoBorrower === "Yes" &&
-            (!String(f.noCbRelationship ?? "").trim() || !String(f.combinedDti ?? "").trim())
-          ) {
-            need.push("For the co-borrower, what's the relationship and the combined DTI?");
-          }
-          if (residualTriggered(f)) {
-            if (!String(f.householdSize ?? "").trim())
-              need.push("What's the household size (number of people)?");
-            if (!String(f.monthlyResidualIncome ?? "").trim())
-              need.push("What's the monthly residual income (e.g. $4,300)?");
-          }
-          if (need.length === 0) {
-            delete attemptsRef.current.dtiCapacityExtras;
-            await advance();
-            return;
-          }
-          const tries = (attemptsRef.current.dtiCapacityExtras =
-            (attemptsRef.current.dtiCapacityExtras ?? 0) + 1);
-          if (tries >= 3) {
-            const def: Partial<WizardForm> = {};
-            if (nocbVisible(f) && !String(f.nonOccupantCoBorrower ?? "").trim())
-              def.nonOccupantCoBorrower = "No";
-            if (residualTriggered(f)) {
-              if (!String(f.householdSize ?? "").trim()) def.householdSize = "1";
-              if (!String(f.monthlyResidualIncome ?? "").trim()) def.monthlyResidualIncome = "0";
-            }
-            mergeForm(def);
-            delete attemptsRef.current.dtiCapacityExtras;
-            d.appendAssistantChat(
-              "No problem — I'll assume no co-borrower and use placeholder residual figures for now, and move on. You can adjust these anytime from the Mortgage Profile.",
-            );
-            d.triggerQuickEligibilityScan();
-            await advance();
-            return;
-          }
-          // Ask for the first missing piece (keep the bundle pending).
-          d.appendAssistantChat(need[0]);
-          pendingChatFieldRef.current = "dtiCapacityExtras";
+        // Display-only high-DTI notice: acknowledge internally and move straight to
+        // the first follow-up question (NOCB / residual flow).
+        if (pendingChatFieldRef.current === "dtiCapacityNotice") {
+          answeredQIdsRef.current.add("dtiCapacityNotice");
+          await advance();
           return;
         }
 
@@ -1121,6 +1033,9 @@ export function useChatConversation(deps: UseChatConversationDeps) {
           const skip = isFormChatSkipMessage(raw) || CONTINUE_RE.test(raw) || AFFIRM_RE.test(raw);
           if (!skip) {
             const formBefore = { ...d.formSyncRef.current };
+            const summaryQuick = summarySlotsRef.current.includes("noCbRelationship")
+              ? contextAwareParse(raw, "noCbRelationship", formBefore)
+              : {};
             const res = await intakeExtract(d.apiBase, {
               text: raw,
               portfolio: portfolioRef.current,
@@ -1133,6 +1048,7 @@ export function useChatConversation(deps: UseChatConversationDeps) {
               ...(portfolioToFormPatch(res.extracted, {
                 form: d.formSyncRef.current,
               }) as Partial<WizardForm>),
+              ...(summaryQuick as Partial<WizardForm>),
             } as Partial<WizardForm>);
             mergeForm(patch);
             canonicalizeCounty(d.formSyncRef.current.state, patch.stateCounty);
@@ -1142,11 +1058,22 @@ export function useChatConversation(deps: UseChatConversationDeps) {
             d.triggerQuickEligibilityScan();
             const changes = changedRowsFromPatch(formBefore, patch);
             const captured = dropRowsShownAsChanges(
-              mergeCapturedRows(res.captured ?? [], {}),
+              mergeCapturedRows(res.captured ?? [], summaryQuick),
               changes,
             );
+            const hadApplied = Object.entries(patch).some(([k, v]) => {
+              if (typeof v !== "string") return false;
+              const next = v.trim();
+              if (!next) return false;
+              const prev = String(
+                (formBefore as unknown as Record<string, unknown>)[k] ?? "",
+              ).trim();
+              return prev !== next;
+            });
             if (captured.length > 0 || changes.length > 0) {
               d.appendAssistantChat(`CHAT_CAPTURED:${JSON.stringify({ captured, changes })}`);
+            } else if (hadApplied) {
+              d.appendAssistantChat("Got it — captured that.");
             } else {
               d.appendAssistantChat(
                 "I didn't catch any of those in that message — let's keep going one at a time.",
@@ -1925,6 +1852,7 @@ export function useChatConversation(deps: UseChatConversationDeps) {
     portfolioRef.current = {};
     turnRef.current = 0;
     pendingChatFieldRef.current = null;
+    answeredQIdsRef.current = new Set();
     scenarioCapturedRef.current = false;
     brainDumpCapturedRef.current = 0;
     optionalsSkippedRef.current = false;

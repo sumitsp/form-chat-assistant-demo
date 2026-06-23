@@ -252,16 +252,31 @@ export function ExtractedDataPills({
     <div className={cn("space-y-2.5 text-[11px]", className)}>
       {captured.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {captured.map((row, i) => (
-            <span
-              key={i}
-              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200/80 bg-slate-50 px-2.5 py-1 shadow-sm"
-            >
-              <Check className="h-3 w-3 shrink-0 text-emerald-600" aria-hidden="true" />
-              <span className="text-muted-foreground">{row.label}</span>
-              <span className="font-semibold text-foreground">{row.value}</span>
-            </span>
-          ))}
+          {captured.map((row, i) => {
+            // Long values (e.g. Scenario Notes) get a full-width pill that wraps; short
+            // values stay as compact inline no-wrap pills.
+            const longVal = (row.value?.length ?? 0) > 48;
+            return (
+              <span
+                key={i}
+                className={cn(
+                  "inline-flex gap-1.5 rounded-lg border border-slate-200/80 bg-slate-50 px-2.5 py-1 shadow-sm",
+                  longVal ? "w-full max-w-full items-start" : "items-center whitespace-nowrap",
+                )}
+              >
+                <Check
+                  className={cn("h-3 w-3 shrink-0 text-emerald-600", longVal && "mt-0.5")}
+                  aria-hidden="true"
+                />
+                <span className="shrink-0 text-muted-foreground">{row.label}</span>
+                <span
+                  className={cn("font-semibold text-foreground", longVal && "min-w-0 break-words")}
+                >
+                  {row.value}
+                </span>
+              </span>
+            );
+          })}
         </div>
       )}
       {changes.length > 0 && (

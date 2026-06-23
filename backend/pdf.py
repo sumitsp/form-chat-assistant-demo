@@ -68,12 +68,21 @@ class ScenarioPdfRejectedItem(BaseModel):
     program_title: str
     layer: str = ""
     reason: str = ""
+    is_near_miss: bool = False
+    near_miss_hint: str = ""
+
+
+class ScenarioPdfNearMiss(BaseModel):
+    program_id: int
+    hint: str = ""
 
 
 class ScenarioPdfRequest(BaseModel):
     profile_sections: list[ProfileSection] = Field(default_factory=list)
     programs: list[ScenarioPdfProgramItem] = Field(default_factory=list)
     rejected_programs: list[ScenarioPdfRejectedItem] = Field(default_factory=list)
+    near_misses: list[ScenarioPdfNearMiss] = Field(default_factory=list)
+    scenario_description: str = ""
     form_fields: dict[str, Any] | None = None
 
 
@@ -128,6 +137,105 @@ def _short_layer(layer: str) -> str:
     return re.sub(r"\s*\(.*\)", "", layer).strip() or layer
 
 
+_LENDER_ALIAS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bDenali\b", re.I), "Mercury"),
+    (re.compile(r"\bEverest\b", re.I), "Mars"),
+    (re.compile(r"\bDeephaven\b", re.I), "Mars"),
+    (re.compile(r"\bSummit\b", re.I), "Venus"),
+    (re.compile(r"\bVer(?:u|s)s?\b", re.I), "Venus"),
+)
+
+
+def _alias_lender_names(text: str | None) -> str:
+    out = text or ""
+    for pattern, alias in _LENDER_ALIAS_PATTERNS:
+        out = pattern.sub(alias, out)
+    return out
+
+
+_CITIZEN_LABELS = {
+    "us_citizen": "US Citizens",
+    "perm_resident": "Permanent Residents",
+    "non_perm_resident": "Non-Permanent Residents",
+    "foreign_national": "Foreign Nationals",
+    "daca": "DACA borrowers",
+    "itin": "ITIN borrowers",
+}
+
+
+def _join_or(items: list[str]) -> str:
+    items = [i for i in items if i]
+    if not items:
+        return "other borrowers"
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " or " + items[-1]
+
+
+def _humanize_citizen_codes(blob: str) -> str:
+    codes = re.findall(r"[a-z_]+", blob.lower())
+    labels = [_CITIZEN_LABELS.get(c, c.replace("_", " ").title()) for c in codes]
+    return _join_or(labels)
+
+
+def humanize_reject_reason(layer: str, reason: str) -> str:
+    """Rewrite an engine reject reason into plain, non-technical language."""
+    r = _safe_text(reason or "").strip()
+    if not r:
+        return "Not a fit for this scenario."
+
+    m = re.search(r"Citizenship '?([a-z_]+)'? not allowed \(program:\s*(.*?)\)\s*$", r)
+    if m:
+        scenario = _CITIZEN_LABELS.get(m.group(1), m.group(1).replace("_", " ").title())
+        allowed = _humanize_citizen_codes(m.group(2))
+        return f"Built for {allowed} - {scenario} are not eligible."
+
+    if re.search(r"DSCR-only", r, re.I):
+        return "Built for DSCR (rental-income) loans - not a fit for an income-documentation scenario."
+    if re.search(r">\s*scenario DSCR", r):
+        m2 = re.search(r"([\d.]+)\s*>\s*scenario DSCR\s*([\d.]+)", r)
+        if m2:
+            return f"Rental cash-flow (DSCR {m2.group(2)}) is below this program's {m2.group(1)} minimum."
+
+    if re.search(r"Second-lien program only", r, re.I):
+        return "Second-lien (HELOC / HELOAN) programs only - your scenario is a first lien."
+    if re.search(r"Not a second-lien program", r, re.I):
+        return "First-lien programs only - your scenario needs a second lien."
+
+    m = re.search(r"Max FICO (\d+)\s*<\s*scenario FICO (\d+)", r)
+    if m:
+        return f"Credit score {m.group(2)} is above this program's {m.group(1)} ceiling."
+    m = re.search(r"Min FICO (\d+)\s*>\s*scenario FICO (\d+)", r)
+    if m:
+        return f"Credit score {m.group(2)} is below this program's {m.group(1)} minimum."
+
+    m = re.search(r"Max loan \$([\d,]+)\s*<\s*scenario \$([\d,]+)", r)
+    if m:
+        return f"Loan amount ${m.group(2)} is above this program's ${m.group(1)} maximum."
+    m = re.search(r"Min loan \$([\d,]+)\s*>\s*scenario \$([\d,]+)", r)
+    if m:
+        return f"Loan amount ${m.group(2)} is below this program's ${m.group(1)} minimum."
+
+    m = re.search(r"Property type '?([a-z0-9_ ]+)'? not allowed", r, re.I)
+    if m:
+        pretty = m.group(1).replace("_", " ").strip().title()
+        return f"This program doesn't accept {pretty} properties."
+
+    m = re.search(r"LTV.*?([\d.]+)%\s*exceeds", r)
+    if m:
+        return f"Loan-to-value {m.group(1)}% is above this program's limit."
+
+    if re.search(r"exceeds scenario tier max", r):
+        return "Loan amount is above the limit for this scenario's tier."
+
+    m = re.search(r"([\d.]+)\s*ac\s*>\s*max\s*([\d.]+)\s*ac", r)
+    if m:
+        return f"Property acreage ({m.group(1)} ac) is above this program's {m.group(2)}-acre limit."
+
+    cleaned = re.sub(r"\s*\((?:program|scenario)[^)]*\)\s*$", "", r).strip()
+    return cleaned or "Not a fit for this scenario."
+
+
 def rejected_programs_from_trace(trace_data: dict[str, Any]) -> list[ScenarioPdfRejectedItem]:
     programs = trace_data.get("programs") or []
     items: list[ScenarioPdfRejectedItem] = []
@@ -148,28 +256,41 @@ def rejected_programs_from_trace(trace_data: dict[str, Any]) -> list[ScenarioPdf
     return items
 
 
+def _tag_and_sort_rejected(
+    rejected: list[ScenarioPdfRejectedItem],
+    near_misses: list[ScenarioPdfNearMiss],
+) -> list[ScenarioPdfRejectedItem]:
+    """Flag near-miss rows and float them to the top."""
+    hint_by_id = {nm.program_id: (nm.hint or "").strip() for nm in near_misses}
+    for item in rejected:
+        if item.program_id in hint_by_id:
+            item.is_near_miss = True
+            item.near_miss_hint = hint_by_id[item.program_id]
+    return sorted(rejected, key=lambda it: 0 if it.is_near_miss else 1)
+
+
 def enrich_scenario_pdf_request(
     body: ScenarioPdfRequest,
     find_eligible_fn: Callable[..., dict[str, Any]] | None = None,
 ) -> ScenarioPdfRequest:
-    """Resolve rejected programs from form_fields when not already supplied."""
-    if body.rejected_programs or not body.form_fields or not find_eligible_fn:
-        return body
-    try:
-        from backend.eligibility import EligibilityTraceCollector  # noqa: PLC0415
+    """Resolve rejected programs from trace and tag near-misses."""
+    rejected = body.rejected_programs
+    if not rejected and body.form_fields and find_eligible_fn:
+        try:
+            from backend.eligibility import EligibilityTraceCollector  # noqa: PLC0415
 
-        result = find_eligible_fn(body.form_fields, collect_trace=True)
-        trace_data = result.get("program_trace")
-        if not trace_data or not isinstance(trace_data, dict):
-            return body
-        collector = EligibilityTraceCollector.from_dict(trace_data)
-        rejected = rejected_programs_from_trace(collector.to_dict())
-        if not rejected:
-            return body
-        return body.model_copy(update={"rejected_programs": rejected})
-    except Exception as exc:
-        _log.warning("PDF rejected-program trace failed: %s", exc)
+            result = find_eligible_fn(body.form_fields, collect_trace=True)
+            trace_data = result.get("program_trace")
+            if trace_data and isinstance(trace_data, dict):
+                collector = EligibilityTraceCollector.from_dict(trace_data)
+                rejected = rejected_programs_from_trace(collector.to_dict())
+        except Exception as exc:
+            _log.warning("PDF rejected-program trace failed: %s", exc)
+
+    if not rejected:
         return body
+    tagged = _tag_and_sort_rejected(list(rejected), body.near_misses)
+    return body.model_copy(update={"rejected_programs": tagged})
 
 
 def _page_rect():
@@ -264,7 +385,7 @@ class _PdfCanvas:
         )
         self.y = row_y + row_h
 
-    def _draw_footer(self, page_num: int, total_pages: int) -> None:
+    def _draw_footer(self) -> None:
         text = f"Acme Mortgage - Confidential  |  Page {self.page_num}"
         self.page.insert_text(
             (_MARGIN, _page_rect().height - 18),
@@ -273,15 +394,9 @@ class _PdfCanvas:
             fontname="helv",
             color=_MUTED,
         )
-        self.page.insert_text(
-            (_page_rect().width / 2 - 22, _page_rect().height - 6.5),
-            f"-- {page_num} of {total_pages} --",
-            fontsize=7.5,
-            fontname="helv",
-            color=_MUTED,
-        )
 
     def new_page(self) -> None:
+        self._draw_footer()
         self.page = self.doc.new_page(width=_page_rect().width, height=_page_rect().height)
         self.page_num += 1
         self.y = _MARGIN
@@ -367,10 +482,12 @@ class _PdfCanvas:
         self.y += 14
 
     def profile_sections(self, sections: list[ProfileSection]) -> None:
-        label_w = 118
-        value_w = (self.content_w - label_w - 12) / 2
-        col2_x = _MARGIN + label_w + value_w + 12
-        pair_h = 16
+        label_w = 104
+        gutter = 16
+        pair_w = (self.content_w - gutter) / 2
+        value_w = pair_w - label_w - 4
+        col_x = (_MARGIN, _MARGIN + pair_w + gutter)
+        line_h = 11
 
         for sec in sections:
             if not sec.rows:
@@ -379,26 +496,23 @@ class _PdfCanvas:
             rows = sec.rows
             i = 0
             while i < len(rows):
-                self.ensure(pair_h + 4)
+                pair = rows[i : i + 2]
+                wrapped = [self._wrap_lines(_safe_text(r.value) or "-", value_w, 9) for r in pair]
+                row_h = max(16.0, max(len(w) for w in wrapped) * line_h + 5)
+                self.ensure(row_h)
                 row_y = self.y
-                for col in range(2):
-                    if i >= len(rows):
-                        break
-                    r = rows[i]
-                    lx = _MARGIN if col == 0 else col2_x
+                for col, r in enumerate(pair):
+                    lx = col_x[col]
                     vx = lx + label_w
                     self.page.insert_text(
-                        (lx, row_y + 11), _safe_text(r.label), fontsize=8.5, fontname="helv", color=_MUTED
+                        (lx, row_y + 10), _safe_text(r.label), fontsize=8.5, fontname="helv", color=_MUTED
                     )
-                    self.page.insert_textbox(
-                        self._fitz.Rect(vx, row_y, vx + value_w, row_y + pair_h),
-                        _safe_text(r.value) or "-",
-                        fontsize=9,
-                        fontname="helv",
-                        color=_TEXT,
-                    )
-                    i += 1
-                self.y = row_y + pair_h + 2
+                    yy = row_y + 10
+                    for line in wrapped[col]:
+                        self.page.insert_text((vx, yy), line, fontsize=9, fontname="helv", color=_TEXT)
+                        yy += line_h
+                self.y = row_y + row_h
+                i += 2
             self.gap(4)
 
     def _table_header(self, cols: list[tuple[str, float]]) -> list[float]:
@@ -420,10 +534,10 @@ class _PdfCanvas:
         return xs
 
     def programs_table(self, programs: list[ScenarioPdfProgramItem]) -> None:
-        w_program = self.content_w * 0.34
+        w_prog = self.content_w * 0.30
         w_fico = self.content_w * 0.12
         w_loan = self.content_w * 0.18
-        w_products = self.content_w - w_program - w_fico - w_loan
+        w_prod = self.content_w - w_prog - w_fico - w_loan
         self.page.insert_text(
             (_MARGIN, self.y + 10),
             f"{len(programs)} program{'s' if len(programs) != 1 else ''} matched",
@@ -433,27 +547,45 @@ class _PdfCanvas:
         )
         self.y += 16
         self._table_header(
-            [("Program", w_program), ("Min FICO", w_fico), ("Max Loan", w_loan), ("Products", w_products)]
+            [("Program", w_prog), ("Min FICO", w_fico), ("Max Loan", w_loan), ("Products", w_prod)]
         )
         for idx, p in enumerate(programs):
-            title = p.program_title
+            title = _alias_lender_names(p.program_title)
             if p.investor_name.strip():
-                title += f" ({p.investor_name.strip()})"
-            products = (p.products_display or "").strip().replace(", ", " | ")
-            if p.special_overlay:
-                short = p.special_overlay[:120] + ("..." if len(p.special_overlay) > 120 else "")
-                products = f"{products}\nNote: {short}" if products else f"Note: {short}"
+                title += f" ({_alias_lender_names(p.investor_name.strip())})"
+            products = _alias_lender_names((p.products_display or "").strip().replace(", ", " | ")) or "-"
             loan = _fmt_money(p.max_loan) if p.max_loan else "-"
             fico = str(int(p.min_fico)) if p.min_fico is not None else "-"
             self._table_row(
-                [(title, w_program), (fico, w_fico), (loan, w_loan), (products or "-", w_products)],
+                [(title, w_prog), (fico, w_fico), (loan, w_loan), (products, w_prod)],
                 alt=idx % 2 == 1,
                 font_size=8,
             )
 
-    def rejected_table(self, rejected: list[ScenarioPdfRejectedItem]) -> None:
-        w_prog = self.content_w * 0.38
+    def _rejected_group(
+        self,
+        items: list[ScenarioPdfRejectedItem],
+        reason_header: str,
+        *,
+        use_hint: bool,
+    ) -> None:
+        w_prog = self.content_w * 0.34
         w_reason = self.content_w - w_prog
+        self._table_header([("Program", w_prog), (reason_header, w_reason)])
+        for idx, item in enumerate(items):
+            if use_hint and item.near_miss_hint:
+                reason = item.near_miss_hint
+            else:
+                reason = humanize_reject_reason(item.layer, item.reason)
+            reason = _alias_lender_names(reason)
+            self._table_row(
+                [(_alias_lender_names(item.program_title), w_prog), (reason, w_reason)],
+                alt=idx % 2 == 1,
+            )
+
+    def rejected_table(self, rejected: list[ScenarioPdfRejectedItem]) -> None:
+        near = [r for r in rejected if r.is_near_miss]
+        rest = [r for r in rejected if not r.is_near_miss]
         self.page.insert_text(
             (_MARGIN, self.y + 10),
             f"{len(rejected)} program{'s' if len(rejected) != 1 else ''} excluded",
@@ -462,26 +594,17 @@ class _PdfCanvas:
             color=_MUTED,
         )
         self.y += 16
-        self.page.insert_text(
-            (_MARGIN, self.y + 9),
-            "Not a fit for this scenario",
-            fontsize=8.2,
-            fontname="helv",
-            color=_MUTED,
-        )
-        self.y += 14
-        self._table_header([("Program", w_prog), ("Why", w_reason)])
-        for idx, item in enumerate(rejected):
-            reason = item.reason or "-"
-            title = item.program_title
-            self._table_row([(title, w_prog), (reason, w_reason)], alt=idx % 2 == 1)
+        if near:
+            self.subsection_title("Just Missed - reachable with small changes")
+            self._rejected_group(near, "What would make it fit", use_hint=True)
+        if rest:
+            if near:
+                self.gap(6)
+            self.subsection_title("Not a fit for this scenario")
+            self._rejected_group(rest, "Why", use_hint=False)
 
     def finish(self) -> bytes:
-        total_pages = len(self.doc)
-        for idx, page in enumerate(self.doc, start=1):
-            self.page = page
-            self.page_num = idx
-            self._draw_footer(idx, total_pages)
+        self._draw_footer()
         return self.doc.tobytes()
 
 
@@ -558,8 +681,8 @@ def _build_full_html_legacy(body: ScenarioPdfRequest, generated_date: str) -> st
     """Minimal HTML fallback for print preview only."""
     count = len(body.programs)
     rows = "".join(
-        f"<tr><td>{_esc(p.program_title)}</td><td>{p.max_loan or '—'}</td>"
-        f"<td>{_esc(p.products_display or '—')}</td></tr>"
+        f"<tr><td>{_esc(_alias_lender_names(p.program_title))}</td><td>{p.max_loan or '—'}</td>"
+        f"<td>{_esc(_alias_lender_names(p.products_display or '—'))}</td></tr>"
         for p in body.programs
     )
     return f"""<!DOCTYPE html><html><body>

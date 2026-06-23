@@ -32,10 +32,11 @@ import {
   chatAnswerFormPatch,
   creditEventLabel,
   FORM_CHAT_QUESTIONS,
+  formChatQuestionsInFlowOrder,
   formChatProductPrefOptions,
   includeFormChatQuestionInFlow,
-  isAnswered,
   isFormChatProductPrefQuestion,
+  isFormChatQuestionAnswered,
   isNoProductPreference,
   optionsFor,
   parseDocumentationTimeframeReply,
@@ -154,14 +155,14 @@ const WHY_BY_FIELD: Record<string, string> = {
   documentationType:
     "Doc type decides how income is calculated — full doc uses tax returns and W-2s, bank statements use deposits, P&L only skips statements, and asset utilization converts liquid assets to income.",
   documentationTimeframe:
-    "The 12- vs 24-month window changes how income is averaged and which programs apply — and it impacts pricing.",
+    "The 12- vs 24-month window changes how income is averaged and which programs apply.",
   estimatedDti:
     "Once DTI passes 43% on a primary or second-home loan, a residual-income test and the non-occupant co-borrower (NOCB) option come into play.",
   dscr: "On a DSCR loan it's the property's rent-to-payment ratio that qualifies the deal, not the borrower's personal income.",
   rentalType:
     "Short-term rentals carry their own DSCR overlays and leverage caps versus long-term leases.",
   prepaymentTerms:
-    "On investment loans the prepay penalty term feeds both eligibility and pricing — longer terms usually price better.",
+    "On investment loans the prepay penalty term feeds eligibility and product fit — longer terms can qualify differently across programs.",
   reservesAvailable:
     "Months of reserves is a hard gate on most programs — bigger loans and riskier scenarios require more.",
   assetsLiquidFunds:
@@ -265,7 +266,7 @@ function comboFor(
   const byId = new Map(missing.map((q) => [q.id, q]));
   const usable = (id: string) => {
     const q = byId.get(id);
-    return q && !isComplexQuestion(q) ? q : null;
+    return q && !isComplexQuestion(q) && isSummaryOrComboEligible(q) ? q : null;
   };
   const headId = missing[0]?.id;
   const ranked = [
@@ -289,7 +290,6 @@ const COMPLEX_SPECIALS = new Set([
   "county_search",
   "geo_followup",
   "capacity_dti_notice",
-  "capacity_dti_bundle",
   "product_pref",
 ]);
 
@@ -301,6 +301,15 @@ const isOptional = (q: FormChatQuestion) => q.priority === "optional";
 /** Summary (③) cards list mandatory fields only — optionals never mix in. */
 const mandatoryOnly = (missing: FormChatQuestion[]) =>
   missing.filter((q) => q.priority === "mandatory");
+/** Keep NOCB follow-ups as direct asks (never bundled into ③/④). */
+const NO_SUMMARY_OR_COMBO_IDS = new Set([
+  "nonOccupantCoBorrower",
+  "noCbRelationship",
+  "combinedDti",
+]);
+const isSummaryOrComboEligible = (q: FormChatQuestion) => !NO_SUMMARY_OR_COMBO_IDS.has(q.id);
+const summaryEligibleMandatory = (missing: FormChatQuestion[]) =>
+  mandatoryOnly(missing).filter(isSummaryOrComboEligible);
 
 /**
  * Triggered, still-unanswered questions to feed `advanceChatModeNext`, in SLOT order.
@@ -312,18 +321,18 @@ const mandatoryOnly = (missing: FormChatQuestion[]) =>
 export function missingChatQuestions(
   form: WizardForm,
   mode: "lo" | "underwriter",
-  opts: { productPrefConfirmed?: ReadonlySet<string> } = {},
+  opts: { productPrefConfirmed?: ReadonlySet<string>; answeredQIds?: Set<string> } = {},
 ): FormChatQuestion[] {
   const includeOptional = mode === "underwriter";
   const confirmed = opts.productPrefConfirmed;
+  const answeredQIds = opts.answeredQIds;
   return (
-    visibleQuestions(form)
+    formChatQuestionsInFlowOrder(form, { includeOptional, answeredQIds })
       .filter((q) => {
-        if (!includeFormChatQuestionInFlow(q, includeOptional)) return false;
         if (isFormChatProductPrefQuestion(q)) {
           return !confirmed?.has(q.id);
         }
-        if (isAnswered(form, q)) return false;
+        if (isFormChatQuestionAnswered(form, q, answeredQIds)) return false;
         return true;
       })
       // promptFn / geo_followup use empty static prompts — resolve per form so chat
@@ -777,8 +786,9 @@ export function advanceChatModeNext(
   // 4. One-shot deferred re-ask — 2-strike skipped fields come back as one ③ card.
   if (state.forceSummary) {
     state.forceSummary = false;
-    const mand = mandatoryOnly(missing);
+    const mand = summaryEligibleMandatory(missing);
     if (mand.length > 0) return record(state, buildSummary(mand, state, rng), rng);
+    return record(state, buildOptions(missing[0], state, rng), rng);
   }
 
   const next = missing[0];
@@ -804,21 +814,23 @@ export function advanceChatModeNext(
   if (state.turn === 3) {
     const combo = comboFor(missing);
     if (combo) return record(state, buildCombo(combo.fields, combo.lead, state, rng), rng);
-    const mand = mandatoryOnly(missing);
+    const mand = summaryEligibleMandatory(missing);
     if (mand.length > 0) return record(state, buildSummary(mand, state, rng), rng);
+    return record(state, buildOptions(next, state, rng), rng);
   }
 
   // 7b. Q5 — when Q4 went to a combo, the first stock-take lands HERE (Q4 double →
   //     Q5 summary), so every session gets an early ③ instead of waiting for the
   //     periodic interval that short sessions never reach.
   if (state.turn === 4 && last === "combo_question") {
-    const mand = mandatoryOnly(missing);
+    const mand = summaryEligibleMandatory(missing);
     if (mand.length >= 2) return record(state, buildSummary(mand, state, rng), rng);
   }
 
   // 8. Periodic stock-take — force ③ every ~5 asks while enough MANDATORY remains.
-  if ((state.asksSinceSummary ?? 0) >= SUMMARY_INTERVAL && mandatoryOnly(missing).length >= 3) {
-    return record(state, buildSummary(mandatoryOnly(missing), state, rng), rng);
+  const summaryMand = summaryEligibleMandatory(missing);
+  if ((state.asksSinceSummary ?? 0) >= SUMMARY_INTERVAL && summaryMand.length >= 3) {
+    return record(state, buildSummary(summaryMand, state, rng), rng);
   }
 
   // 9. Constrained roll over ① ② ④ with anti-repetition (never 3× the same shape).
@@ -897,11 +909,21 @@ function buildOptions(
   const p = promptFor(q, state.form);
   // The DTI capacity notice is a heads-up that leads into extra details — not a casual
   // yes/no. Render it as a plain notice: no breezy opener, no "(Yes / No)" suffix.
-  if (q.special === "capacity_dti_notice" || q.special === "capacity_dti_bundle") {
+  if (q.special === "capacity_dti_notice") {
     return {
       format: "options_question",
       fields: [q],
       text: p.question,
+      pendingChatField: q.id,
+    };
+  }
+  // This follows immediately after the high-DTI notice. Keep it direct to avoid
+  // sounding like we repeated the same statement twice.
+  if (q.id === "nonOccupantCoBorrower") {
+    return {
+      format: "options_question",
+      fields: [q],
+      text: `Q. ${p.question} (Yes / No)`,
       pendingChatField: q.id,
     };
   }
@@ -988,6 +1010,11 @@ const CHAT_FIELD_CAPTURE_LABELS: Record<string, string> = {
   documentationType: "Doc Type",
   documentationTimeframe: "Doc Timeframe",
   estimatedDti: "DTI",
+  nonOccupantCoBorrower: "Non-Occupant Co-Borrower",
+  noCbRelationship: "Co-Borrower Relationship",
+  combinedDti: "Combined DTI",
+  householdSize: "Household Size",
+  monthlyResidualIncome: "Monthly Residual Income",
   dscr: "DSCR",
   rentalType: "Rental Type",
   prepaymentTerms: "Prepayment",
@@ -1177,11 +1204,63 @@ export function contextAwareParse(
   }
 
   if (q.kind === "number" || q.kind === "currency") {
-    const m = text.replace(/,/g, "").match(/\d+(?:\.\d+)?/);
-    return m ? { [q.id]: m[0] } : {};
+    const compact = text
+      .toLowerCase()
+      .replace(/[$,%]/g, " ")
+      .replace(/,/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    // Accept compact financial shorthand in typed replies:
+    // "3k" => 3000, "2.5m" => 2500000, "3 thousand" => 3000.
+    const m = compact.match(/^(\d+(?:\.\d+)?)\s*(k|m|thousand|million)?\b/);
+    if (!m) return {};
+    const base = Number(m[1]);
+    if (!Number.isFinite(base)) return {};
+    const unit = m[2] ?? "";
+    const mult =
+      unit === "k" || unit === "thousand"
+        ? 1_000
+        : unit === "m" || unit === "million"
+          ? 1_000_000
+          : 1;
+    const parsed = Math.round(base * mult);
+    return { [q.id]: String(parsed) };
   }
 
   if (q.kind === "enum") {
+    if (q.id === "noCbRelationship") {
+      const relText = lc
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!relText) return {};
+      const has = (re: RegExp) => re.test(relText);
+      if (has(/\b(mother|father|mom|mum|dad|parent|parents)\b/)) {
+        return { noCbRelationship: "Parent" };
+      }
+      if (has(/\b(brother|sister|sibling|siblings)\b/)) {
+        return { noCbRelationship: "Sibling" };
+      }
+      if (has(/\b(spouse|wife|husband|partner|domestic partner)\b/)) {
+        return { noCbRelationship: "Spouse / Domestic Partner" };
+      }
+      if (has(/\b(son|daughter|child|children)\b/)) {
+        return { noCbRelationship: "Child" };
+      }
+      if (has(/\b(grandmother|grandfather|grandparent|grandparents)\b/)) {
+        return { noCbRelationship: "Grandparent" };
+      }
+      if (has(/\b(aunt|uncle)\b/)) {
+        return { noCbRelationship: "Aunt / Uncle" };
+      }
+      if (has(/\b(cousin|cousins)\b/)) {
+        return { noCbRelationship: "Cousin" };
+      }
+      if (has(/\b(relative|family)\b/)) {
+        return { noCbRelationship: "Other Relative" };
+      }
+    }
+
     if (q.id === "documentationTimeframe") {
       const parsed = parseDocumentationTimeframeReply(text);
       if (parsed) return { [q.id]: parsed };
