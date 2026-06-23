@@ -94,6 +94,7 @@ import {
   LIEN_POSITION_PIGGYBACK,
   LOAN_TERM_SELECT_OPTIONS,
   existingSecondLienNeedsSubordination,
+  formatMortgageAcronyms,
   formatLoanTermDisplay,
   formatLoanTermStorage,
   formatMoneyForInput,
@@ -215,12 +216,38 @@ export type FormChatMode = "underwriter" | "lo";
 /** Pause after Good News / Hard Luck finishes streaming before the results table appears. */
 const RESULTS_TABLE_REVEAL_DELAY_MS = 350;
 
-/** Hardcoded starter questions on a program's Know More card (handy for new borrowers). */
-const PROGRAM_FOLLOWUP_QUESTIONS = [
+/** The 3 always-shown starter questions on a program's Know More card. */
+const PROGRAM_FOLLOWUP_FIXED = [
   "What are the geo / state restrictions?",
   "What documentation does this program require?",
   "What credit events affect eligibility?",
 ] as const;
+
+/** Pool the rotating 4th chip is drawn from (all universally relevant Non-QM topics). */
+const PROGRAM_FOLLOWUP_POOL = [
+  "What's the prepayment penalty structure (terms, occupancies, ineligible states)?",
+  "What appraisal requirements apply (review product, second-appraisal threshold)?",
+  "What are the rules on gift funds?",
+  "Are non-occupant co-borrowers permitted, and under what conditions?",
+  "Can escrows be waived, and what are the conditions?",
+  "What are the seller-concession / interested-party-contribution limits?",
+  "What's the declining-markets overlay?",
+  "Are temporary buydowns allowed, and who can fund them?",
+] as const;
+
+/**
+ * The 4th Know More chip — picked ONCE per page load (lazily, so it's client-side and
+ * never drifts between SSR and hydration). It's identical across every program card this
+ * session; a fresh reload may surface a different question from the pool.
+ */
+let _followupFourth: string | null = null;
+function programFollowupQuestions(): readonly string[] {
+  if (_followupFourth === null) {
+    _followupFourth =
+      PROGRAM_FOLLOWUP_POOL[Math.floor(Math.random() * PROGRAM_FOLLOWUP_POOL.length)];
+  }
+  return [...PROGRAM_FOLLOWUP_FIXED, _followupFourth];
+}
 
 async function summarizeProgramNotes(
   program: EligibleProgram,
@@ -1415,13 +1442,36 @@ export function FormChatFlow({
 
     if (!onAsk) return;
 
+    // Scope follow-up to the focused program using the canonical program title
+    // (not the aliased display label) so retrieval anchors to guideline text.
+    const canonicalProgramName = focusedResultsProgram
+      ? formatMortgageAcronyms(
+          (
+            focusedResultsProgram.program_name_np ||
+            focusedResultsProgram.program_name ||
+            ""
+          ).trim(),
+        )
+      : "";
+    const cleanQ = q.replace(/^for\s+[^:]+:\s*/i, "").trim();
+    const focusName = canonicalProgramName || (focusedResultsProgram ? programDisplayName(focusedResultsProgram) : "");
+    const scopedQ =
+      focusName && !cleanQ.toLowerCase().startsWith(`${focusName.toLowerCase()}:`)
+        ? `${focusName}: ${cleanQ}`
+        : cleanQ;
+    const focusDisplayName = focusedResultsProgram ? programDisplayName(focusedResultsProgram) : "";
+    const uiQ =
+      focusDisplayName && !cleanQ.toLowerCase().startsWith(`${focusDisplayName.toLowerCase()}:`)
+        ? `${focusDisplayName}: ${cleanQ}`
+        : cleanQ;
+
     pinScrollRef.current = false;
-    pushUser(q);
+    pushUser(uiQ);
     const loadingId = pushThinkingLine({ labels: RAG_FOLLOWUP_LABELS });
     setAsking(true);
     pinChatToBottom("smooth");
     try {
-      const reply = await onAsk(q, {
+      const reply = await onAsk(scopedQ, {
         program: focusedResultsProgram ?? undefined,
       });
       const replyId = nextId();
@@ -3439,14 +3489,14 @@ export function FormChatFlow({
                           >
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-[12px] text-muted-foreground">Ask:</span>
-                              {PROGRAM_FOLLOWUP_QUESTIONS.map((qq) => (
+                              {programFollowupQuestions().map((qq) => (
                                 <button
                                   key={qq}
                                   type="button"
                                   disabled={asking || detailStale}
                                   onClick={() => {
                                     pinChatToBottom("smooth");
-                                    void askResultsQuestion(`For ${name}: ${qq}`);
+                                    void askResultsQuestion(qq);
                                   }}
                                   className="rounded-lg border border-[#012a5b]/20 bg-[#012a5b]/[0.05] px-3 py-1.5 text-[13px] text-[#012a5b] transition-colors hover:bg-[#012a5b]/10 disabled:opacity-50 dark:text-sky-300"
                                 >

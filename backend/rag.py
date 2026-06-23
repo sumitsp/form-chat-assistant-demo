@@ -62,11 +62,14 @@ def detect_program_key(question: str) -> str | None:
     q = question.lower()
     brand_aliases: list[tuple[str, str]] = [
         ("denali", "nqm"),
+        ("mercury", "nqm"),
         ("nqm funding", "nqm"),
         ("deephaven", "everest"),
         ("everest", "everest"),
+        ("mars", "everest"),
         ("summit", "versus"),
         ("verus", "versus"),
+        ("venus", "versus"),
     ]
     brand_hits = sorted({key for token, key in brand_aliases if token in q})
     if len(brand_hits) == 1:
@@ -102,6 +105,15 @@ def detect_program_key(question: str) -> str | None:
     if len(hits) == 1:
         return hits[0]
     return None
+
+
+def _dealias_program_names_in_text(text: str) -> str:
+    """Map UI aliases back to canonical lender/program names for retrieval."""
+    out = text or ""
+    out = re.sub(r"\bMercury\b", "Denali", out, flags=re.I)
+    out = re.sub(r"\bVenus\b", "Summit", out, flags=re.I)
+    out = re.sub(r"\bMars\b", "Everest", out, flags=re.I)
+    return out
 
 
 def _extract_borrower_question(message: str) -> str:
@@ -771,7 +783,7 @@ def _resolve_selected_program_meta(selected_program: str | None) -> dict[str, An
     """
     if not selected_program or not selected_program.strip():
         return None
-    sp = selected_program.strip()
+    sp = _dealias_program_names_in_text(selected_program.strip())
 
     lender_part = ""
     program_part = sp

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -432,6 +433,26 @@ def _log_chat(session_id: str, user_msg: str, assistant_reply: str, selected_pro
         _log.warning("chat_messages log failed: %s", exc)
 
 
+_UI_LENDER_ALIAS_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bDenali\s*\(\s*NQM(?:\s+Funding)?\s*\)", re.I), "Mercury"),
+    (re.compile(r"\bDenali\b", re.I), "Mercury"),
+    (re.compile(r"\bEverest\s*\(\s*Deephaven\s*\)", re.I), "Mars"),
+    (re.compile(r"\bEverest\b", re.I), "Mars"),
+    (re.compile(r"\bDeephaven\b", re.I), "Mars"),
+    (re.compile(r"\bSummit\s*\(\s*Ver(?:u|s)s?\s*\)", re.I), "Venus"),
+    (re.compile(r"\bSummit\b", re.I), "Venus"),
+    (re.compile(r"\bVer(?:u|s)s?\b", re.I), "Venus"),
+)
+
+
+def _alias_lender_names_for_ui(text: str) -> str:
+    """Keep backend retrieval canonical while UI copy stays on planet aliases."""
+    out = text or ""
+    for pattern, alias in _UI_LENDER_ALIAS_PATTERNS:
+        out = pattern.sub(alias, out)
+    return out
+
+
 @app.websocket("/")
 async def ws_root(ws: WebSocket) -> None:
     # Some tooling/dev clients attempt a WS connection to "/".
@@ -484,6 +505,7 @@ def chat(body: ChatRequest):
             )
         else:
             reply = GREETING_REPLY
+        reply = _alias_lender_names_for_ui(reply)
         if body.session_id:
             _log_chat(body.session_id, body.message, reply, body.selected_program)
         return ChatResponse(
@@ -506,7 +528,9 @@ def chat(body: ChatRequest):
         )
     try:
         selected = (body.selected_program or "").strip() or None
-        if body.program_id is not None and not selected:
+        # Always prefer exact program_id when provided so Know More stays pinned to
+        # the selected program row, regardless of display-name aliases on the client.
+        if body.program_id is not None:
             selected = f"pid:{body.program_id}"
 
         # Selected-program scope must always win, even if UI sends mode=results_general.
@@ -531,14 +555,17 @@ def chat(body: ChatRequest):
         raise HTTPException(status_code=502, detail=str(e)) from e
     if out.get("empty"):
         raise HTTPException(status_code=400, detail="Empty message")
-    reply = (out.get("reply") or "").strip()
+    reply = _alias_lender_names_for_ui((out.get("reply") or "").strip())
+    program_label = out.get("program")
+    if isinstance(program_label, str):
+        program_label = _alias_lender_names_for_ui(program_label)
     if body.session_id:
         _log_chat(body.session_id, body.message, reply, body.selected_program)
     return ChatResponse(
         reply=reply,
         sources=out.get("sources") or [],
         used_llm=bool(out.get("used_llm")),
-        program=out.get("program"),
+        program=program_label,
         collection=out.get("collection"),
     )
 
